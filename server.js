@@ -15,7 +15,7 @@ app.use(express.json());
 app.use(
     cors({
       origin: [
-        'http://localhost:5500', // Localhost shorthand
+        'http://localhost:3000', // Localhost shorthand
         'http://127.0.0.1:5500', // Exact IP used by Live Server
         process.env.FRONTEND_URL || 'https://your-deployed-frontend-url.com' // Deployed frontend
       ],
