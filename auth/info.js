@@ -221,4 +221,39 @@ router.post('/fetch', async (req, res) => {
     }
 });
 
+// Check if a Username Exists
+router.post('/check-username', async (req, res) => {
+    const { username } = req.body;
+
+    try {
+        if (!username) {
+            return res.status(400).json({ error: 'Username is required.' });
+        }
+
+        // Check if the username already exists
+        const { data: userData, error: userError } = await supabase
+            .from('users')
+            .select('id') // Only check for existence
+            .eq('username', username)
+            .single();
+
+        if (userError && userError.code === 'PGRST116') {
+            // "No rows found" - username is available
+            return res.status(200).json({ isAvailable: true });
+        }
+
+        if (userError) {
+            // Other errors
+            console.error('Error checking username:', userError.message);
+            return res.status(500).json({ error: 'Failed to check username availability.' });
+        }
+
+        // Username exists
+        return res.status(200).json({ isAvailable: false });
+    } catch (err) {
+        console.error('Unexpected Error:', err.message);
+        res.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
 module.exports = router;
