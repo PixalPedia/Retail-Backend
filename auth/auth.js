@@ -324,19 +324,38 @@ const verifyEmailWithOTP = async (req, res) => {
 
 // Request OTP for password reset
 const requestOTPForPasswordReset = async (req, res) => {
-    const { email } = req.body;
+  const { email } = req.body;
 
-    try {
-        const otp = generateOTP();
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  try {
+    const otp = generateOTP(); // Generate a new OTP
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // Set OTP expiration time (10 minutes)
 
-        await sendOTPEmail(email, otp, 'password reset');
-        await supabase.from('otps').insert([{ email, otp, purpose: 'password_reset', expires_at: expiresAt }]);
+    // Delete existing OTPs for the same email and purpose
+    const { error: deleteError } = await supabase
+      .from('otps')
+      .delete()
+      .match({ email, purpose: 'password_reset' });
 
-        res.status(200).json({ message: 'OTP sent for password reset. Please check your email.' });
-    } catch (err) {
-        res.status(400).json({ error: 'Request OTP failed', details: err.message });
+    if (deleteError) {
+      throw new Error(`Failed to delete previous OTPs: ${deleteError.message}`);
     }
+
+    // Send the new OTP via email
+    await sendOTPEmail(email, otp, 'password reset');
+
+    // Insert the new OTP into the database
+    const { error: insertError } = await supabase
+      .from('otps')
+      .insert([{ email, otp, purpose: 'password_reset', expires_at: expiresAt }]);
+
+    if (insertError) {
+      throw new Error(`Failed to insert new OTP: ${insertError.message}`);
+    }
+
+    res.status(200).json({ message: 'OTP sent for password reset. Please check your email.' });
+  } catch (err) {
+    res.status(400).json({ error: 'Request OTP failed', details: err.message });
+  }
 };
 
 // Reset Password with OTP
