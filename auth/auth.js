@@ -323,12 +323,14 @@ const verifyEmailWithOTP = async (req, res) => {
 };
 
 // Request OTP for password reset
+// Request OTP for password reset
 const requestOTPForPasswordReset = async (req, res) => {
   const { email } = req.body;
 
   try {
     const otp = generateOTP(); // Generate a new OTP
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // Set OTP expiration time (10 minutes)
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+    console.log('Generated OTP and expiration time:', { otp, expiresAt });
 
     // Delete existing OTPs for the same email and purpose
     const { error: deleteError } = await supabase
@@ -337,11 +339,10 @@ const requestOTPForPasswordReset = async (req, res) => {
       .match({ email, purpose: 'password_reset' });
 
     if (deleteError) {
-      throw new Error(`Failed to delete previous OTPs: ${deleteError.message}`);
+      console.error('Error deleting existing OTPs:', deleteError.message);
+      throw new Error('Failed to delete previous OTPs');
     }
-
-    // Send the new OTP via email
-    await sendOTPEmail(email, otp, 'password reset');
+    console.log('Old OTPs deleted successfully for:', email);
 
     // Insert the new OTP into the database
     const { error: insertError } = await supabase
@@ -349,45 +350,67 @@ const requestOTPForPasswordReset = async (req, res) => {
       .insert([{ email, otp, purpose: 'password_reset', expires_at: expiresAt }]);
 
     if (insertError) {
-      throw new Error(`Failed to insert new OTP: ${insertError.message}`);
+      console.error('Error inserting new OTP:', insertError.message);
+      throw new Error('Failed to insert new OTP');
     }
+    console.log('New OTP inserted successfully for:', email);
+
+    // Send the OTP email
+    await sendOTPEmail(email, otp, 'password reset');
+    console.log('OTP email sent successfully to:', email);
 
     res.status(200).json({ message: 'OTP sent for password reset. Please check your email.' });
   } catch (err) {
+    console.error('Error in requestOTPForPasswordReset:', err.message);
     res.status(400).json({ error: 'Request OTP failed', details: err.message });
   }
 };
 
 // Reset Password with OTP
 const resetPasswordWithOTP = async (req, res) => {
-    const { email, otp, new_password } = req.body;
+  const { email, otp, new_password } = req.body;
 
-    try {
-        if (!email || !otp || !new_password) {
-            return res.status(400).json({ error: 'All fields are required!' });
-        }
-
-        const sanitizedEmail = email.trim().toLowerCase();
-        const hashedPassword = await bcrypt.hash(new_password, 10);
-
-        const { data: otpRecord, error } = await supabase
-            .from('otps')
-            .select('*')
-            .eq('email', sanitizedEmail)
-            .eq('otp', otp)
-            .eq('purpose', 'password_reset')
-            .single();
-
-        if (error || new Date(otpRecord.expires_at) < new Date()) {
-            return res.status(400).json({ error: 'Invalid or expired OTP' });
-        }
-
-        await supabase.from('users').update({ password: hashedPassword }).eq('email', sanitizedEmail);
-
-        res.status(200).json({ message: 'Password reset successful!' });
-    } catch (err) {
-        res.status(500).json({ error: 'Reset password failed', details: err.message });
+  try {
+    if (!email || !otp || !new_password) {
+      return res.status(400).json({ error: 'All fields are required!' });
     }
+
+    const sanitizedEmail = email.trim().toLowerCase();
+    const hashedPassword = await bcrypt.hash(new_password, 10);
+
+    // Retrieve the OTP record
+    const { data: otpRecord, error: otpError } = await supabase
+      .from('otps')
+      .select('*')
+      .eq('email', sanitizedEmail)
+      .eq('otp', otp)
+      .eq('purpose', 'password_reset')
+      .single();
+
+    if (otpError || !otpRecord || new Date(otpRecord.expires_at) < new Date()) {
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+
+    console.log('Valid OTP Record:', otpRecord);
+
+    // Update the user's password
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ password: hashedPassword })
+      .eq('email', sanitizedEmail);
+
+    if (updateError) {
+      console.log('Update Error:', updateError);
+      throw new Error('Password update failed');
+    }
+
+    console.log('Password updated successfully for:', sanitizedEmail);
+
+    res.status(200).json({ message: 'Password reset successful!' });
+  } catch (err) {
+    console.error('Error in resetPasswordWithOTP:', err.message);
+    res.status(500).json({ error: 'Reset password failed', details: err.message });
+  }
 };
 
 // resend otp
