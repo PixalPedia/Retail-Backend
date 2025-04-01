@@ -162,7 +162,6 @@ const signup = async (req, res) => {
     }
 };
 
-// Login function
 const login = async (req, res) => {
     const { email, password } = req.body;
     const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress; // Capture user's IP address
@@ -261,10 +260,17 @@ const login = async (req, res) => {
             { expiresIn: '1h' } // Token expires in 1 hour
         );
 
-        // Respond with the token and user details, including ID
+        // Set the JWT as an HTTP-only cookie
+        res.cookie('token', token, {
+            httpOnly: true, // Prevent access via JavaScript
+            secure: process.env.NODE_ENV === 'production', // Enable HTTPS in production
+            sameSite: 'Strict', // Prevent CSRF attacks
+            maxAge: 60 * 60 * 1000, // Expire after 1 hour
+        });
+
+        // Respond with user details (excluding token)
         res.status(200).json({
             message: 'Login successful.',
-            token,
             user: {
                 id: user.id,
                 username: user.username,
@@ -458,15 +464,22 @@ const superuserLogin = async (req, res) => {
                 is_superuser: true,
             },
             process.env.JWT_SECRET,
-            { expiresIn: '1h' }
+            { expiresIn: '1h' } // Token expires in 1 hour
         );
 
         console.log('JWT token generated for superuser:', sanitizedEmail);
 
-        // Respond with success
+        // Set the JWT as an HTTP-only secure cookie
+        res.cookie('token', token, {
+            httpOnly: true, // Prevent access via JavaScript
+            secure: process.env.NODE_ENV === 'production', // Only send cookies over HTTPS in production
+            sameSite: 'Strict', // Prevent CSRF attacks
+            maxAge: 60 * 60 * 1000, // Expire after 1 hour
+        });
+
+        // Respond with success, excluding the token in the JSON response
         res.status(200).json({
             message: 'Superuser login successful.',
-            token,
             user: {
                 id: superuser.id, // UID included in the response
                 email: superuser.email,
