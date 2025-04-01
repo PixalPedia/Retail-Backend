@@ -378,7 +378,7 @@ const resetPasswordWithOTP = async (req, res) => {
     const sanitizedEmail = email.trim().toLowerCase();
     const hashedPassword = await bcrypt.hash(new_password, 10);
 
-    // Retrieve the OTP record
+    // Fetch the OTP record with debugging
     const { data: otpRecord, error: otpError } = await supabase
       .from('otps')
       .select('*')
@@ -387,8 +387,17 @@ const resetPasswordWithOTP = async (req, res) => {
       .eq('purpose', 'password_reset')
       .single();
 
-    if (otpError || !otpRecord || new Date(otpRecord.expires_at) < new Date()) {
-      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    console.log('OTP Record:', otpRecord);
+    console.log('OTP Query Error:', otpError);
+
+    if (otpError || !otpRecord) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+
+    // Check OTP expiration
+    if (new Date(otpRecord.expires_at) < new Date()) {
+      console.error('Expired OTP:', otpRecord);
+      return res.status(400).json({ error: 'Expired OTP' });
     }
 
     console.log('Valid OTP Record:', otpRecord);
@@ -400,18 +409,18 @@ const resetPasswordWithOTP = async (req, res) => {
       .eq('email', sanitizedEmail);
 
     if (updateError) {
-      console.log('Update Error:', updateError);
+      console.error('Password Update Error:', updateError.message);
       throw new Error('Password update failed');
     }
 
     console.log('Password updated successfully for:', sanitizedEmail);
-
     res.status(200).json({ message: 'Password reset successful!' });
   } catch (err) {
     console.error('Error in resetPasswordWithOTP:', err.message);
     res.status(500).json({ error: 'Reset password failed', details: err.message });
   }
 };
+
 
 // resend otp
 const otpRequests = {}; // Temporary store for tracking OTP requests by email or IP
