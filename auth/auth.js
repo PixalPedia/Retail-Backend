@@ -60,6 +60,30 @@ const sendOTPEmail = async (email, otp, purpose) => {
         throw new Error('Failed to send OTP email');
     }
 };
+// Function to check email verification status
+const isEmailVerified = async (email) => {
+    try {
+        // Normalize the email
+        const sanitizedEmail = email.trim().toLowerCase();
+
+        // Fetch the user's verification status from the database
+        const { data: user, error: userError } = await supabase
+            .from('users')
+            .select('is_verified') // Only fetch the verification status
+            .eq('email', sanitizedEmail)
+            .single();
+
+        if (userError || !user) {
+            throw new Error('User not found.');
+        }
+
+        // Return the verification status
+        return user.is_verified;
+    } catch (err) {
+        console.error('Verification Check Error:', err.message);
+        throw new Error('Error checking email verification status.');
+    }
+};
 
 // Signup function
 const signup = async (req, res) => {
@@ -195,7 +219,7 @@ const signup = async (req, res) => {
 // Login function
 const login = async (req, res) => {
     const { email, password } = req.body;
-    const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress; // Capture user's IP address
+    const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
 
     try {
         // Validate inputs
@@ -203,25 +227,14 @@ const login = async (req, res) => {
             return res.status(400).json({ error: 'Email and password are required.' });
         }
 
-        // Normalize the email
-        const sanitizedEmail = email.trim().toLowerCase();
-
-        // Fetch the user from the database (include `is_verified` status)
-        const { data: user, error: userError } = await supabase
-            .from('users')
-            .select('id, username, email, password, is_verified') // Include verification status
-            .eq('email', sanitizedEmail)
-            .single();
-
-        // **Check if user exists**
-        if (userError || !user) {
-            return res.status(401).json({ error: 'Invalid email or password.' });
-        }
-
-        // **Check if the user's email is verified BEFORE anything else**
-        if (!user.is_verified) {
+        // Check if the email is verified
+        const emailVerified = await isEmailVerified(email);
+        if (!emailVerified) {
             return res.status(403).json({ error: 'Email not verified. Please verify your email to log in.' });
         }
+
+        // Normalize the email
+        const sanitizedEmail = email.trim().toLowerCase();
 
         // Fetch failed attempts from the database
         const { data: attemptRecord, error: attemptError } = await supabase
@@ -235,27 +248,52 @@ const login = async (req, res) => {
 
         // Check if the account is temporarily locked
         if (attemptRecord && attemptRecord.failed_attempts >= 5 && new Date() < new Date(attemptRecord.locked_until)) {
-            const lockRemaining = Math.ceil((new Date(attemptRecord.locked_until).getTime() - Date.now()) / 60000); // Minutes remaining
+            const lockRemaining = Math.ceil((new Date(attemptRecord.locked_until).getTime() - Date.now()) / 60000);
             return res.status(403).json({
                 error: `Too many failed attempts. Account is locked. Try again after ${lockRemaining} minutes.`,
             });
         }
 
-        // **Compare the provided password with the hashed password from the database**
-        const isPasswordCorrect = await bcrypt.compare(password, user.password);
-        if (!isPasswordCorrect) {
-            // Handle failed login attempt for incorrect password
+        // Fetch the user from the database
+        const { data: user, error: userError } = await supabase
+            .from('users')
+            .select('id, username, email, password') // Fetch only necessary fields
+            .eq('email', sanitizedEmail)
+            .single();
+
+        if (userError || !user) {
             const newFailedAttempts = attemptRecord ? attemptRecord.failed_attempts + 1 : 1;
-            const lockUntil = newFailedAttempts >= 5 ? new Date(Date.now() + 30 * 60 * 1000) : null; // Lock for 30 minutes after 5 failed attempts
+            const lockUntil = newFailedAttempts >= 5 ? new Date(Date.now() + 30 * 60 * 1000) : null;
 
             if (attemptRecord) {
-                // Update failed login attempts in the database
                 await supabase.from('failed_login_attempts').update({
                     failed_attempts: newFailedAttempts,
                     locked_until: lockUntil,
                 }).eq('email', sanitizedEmail).eq('ip_address', ip);
             } else {
-                // Insert new failed login attempt record
+                await supabase.from('failed_login_attempts').insert([{
+                    email: sanitizedEmail,
+                    ip_address: ip,
+                    failed_attempts: 1,
+                    locked_until: null,
+                }]);
+            }
+
+            return res.status(401).json({ error: 'Invalid email or password.' });
+        }
+
+        // Compare the provided password with the hashed password from the database
+        const isPasswordCorrect = await bcrypt.compare(password, user.password);
+        if (!isPasswordCorrect) {
+            const newFailedAttempts = attemptRecord ? attemptRecord.failed_attempts + 1 : 1;
+            const lockUntil = newFailedAttempts >= 5 ? new Date(Date.now() + 30 * 60 * 1000) : null;
+
+            if (attemptRecord) {
+                await supabase.from('failed_login_attempts').update({
+                    failed_attempts: newFailedAttempts,
+                    locked_until: lockUntil,
+                }).eq('email', sanitizedEmail).eq('ip_address', ip);
+            } else {
                 await supabase.from('failed_login_attempts').insert([{
                     email: sanitizedEmail,
                     ip_address: ip,
@@ -274,18 +312,17 @@ const login = async (req, res) => {
         const token = jwt.sign(
             { id: user.id, email: user.email, username: user.username },
             process.env.JWT_SECRET,
-            { expiresIn: '1h' } // Token expires in 1 hour
+            { expiresIn: '1h' }
         );
 
         // Set the JWT as an HTTP-only cookie
         res.cookie('token', token, {
-            httpOnly: true, // Prevent access via JavaScript
-            secure: process.env.NODE_ENV === 'production', // Enable HTTPS in production
-            sameSite: 'Strict', // Prevent CSRF attacks
-            maxAge: 60 * 60 * 1000, // Expire after 1 hour
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'Strict',
+            maxAge: 60 * 60 * 1000,
         });
 
-        // Respond with user details (excluding token)
         res.status(200).json({
             message: 'Login successful.',
             user: {
