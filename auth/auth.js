@@ -206,6 +206,23 @@ const login = async (req, res) => {
         // Normalize the email
         const sanitizedEmail = email.trim().toLowerCase();
 
+        // Fetch the user from the database (include `is_verified` status)
+        const { data: user, error: userError } = await supabase
+            .from('users')
+            .select('id, username, email, password, is_verified') // Include verification status
+            .eq('email', sanitizedEmail)
+            .single();
+
+        // **Check if user exists**
+        if (userError || !user) {
+            return res.status(401).json({ error: 'Invalid email or password.' });
+        }
+
+        // **Check if the user's email is verified BEFORE anything else**
+        if (!user.is_verified) {
+            return res.status(403).json({ error: 'Email not verified. Please verify your email to log in.' });
+        }
+
         // Fetch failed attempts from the database
         const { data: attemptRecord, error: attemptError } = await supabase
             .from('failed_login_attempts')
@@ -222,42 +239,6 @@ const login = async (req, res) => {
             return res.status(403).json({
                 error: `Too many failed attempts. Account is locked. Try again after ${lockRemaining} minutes.`,
             });
-        }
-
-        // Fetch the user from the database
-        const { data: user, error: userError } = await supabase
-            .from('users')
-            .select('id, username, email, password, is_verified') // Include verification status
-            .eq('email', sanitizedEmail)
-            .single();
-
-        if (userError || !user) {
-            // Handle failed login attempt for invalid credentials
-            const newFailedAttempts = attemptRecord ? attemptRecord.failed_attempts + 1 : 1;
-            const lockUntil = newFailedAttempts >= 5 ? new Date(Date.now() + 30 * 60 * 1000) : null; // Lock for 30 minutes after 5 failed attempts
-
-            if (attemptRecord) {
-                // Update failed login attempts in the database
-                await supabase.from('failed_login_attempts').update({
-                    failed_attempts: newFailedAttempts,
-                    locked_until: lockUntil,
-                }).eq('email', sanitizedEmail).eq('ip_address', ip);
-            } else {
-                // Insert new failed login attempt record
-                await supabase.from('failed_login_attempts').insert([{
-                    email: sanitizedEmail,
-                    ip_address: ip,
-                    failed_attempts: 1,
-                    locked_until: null,
-                }]);
-            }
-
-            return res.status(401).json({ error: 'Invalid email or password.' });
-        }
-
-        // **Check if the user's email is verified**
-        if (!user.is_verified) {
-            return res.status(403).json({ error: 'Email not verified. Please verify your email to log in.' });
         }
 
         // **Compare the provided password with the hashed password from the database**
@@ -318,6 +299,7 @@ const login = async (req, res) => {
         res.status(500).json({ error: 'Login failed. Please try again.', details: err.message });
     }
 };
+
 
 // VerifyEmailwithotp fucntion
 const verifyEmailWithOTP = async (req, res) => {
