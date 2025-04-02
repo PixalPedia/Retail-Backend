@@ -380,49 +380,76 @@ const requestOTPForPasswordReset = async (req, res) => {
     const { email } = req.body;
   
     try {
-      if (!email) {
-        return res.status(400).json({ error: 'Email is required.' });
-      }
-  
-      // Normalize the email to lowercase for consistency
-      const sanitizedEmail = email.trim().toLowerCase();
-      const otp = generateOTP(); // Generate a new OTP
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
-      console.log('Generated OTP and expiration time:', { otp, expiresAt });
-  
-      // Delete existing OTPs for the same email and purpose
-      const { error: deleteError } = await supabase
-        .from('otps')
-        .delete()
-        .match({ email: sanitizedEmail, purpose: 'password_reset' }); // Use sanitized email here
-  
-      if (deleteError) {
-        console.error('Error deleting existing OTPs:', deleteError.message);
-        throw new Error('Failed to delete previous OTPs');
-      }
-      console.log('Old OTPs deleted successfully for:', sanitizedEmail);
-  
-      // Insert the new OTP into the database
-      const { error: insertError } = await supabase
-        .from('otps')
-        .insert([{ email: sanitizedEmail, otp, purpose: 'password_reset', expires_at: expiresAt }]); // Use sanitized email here
-  
-      if (insertError) {
-        console.error('Error inserting new OTP:', insertError.message);
-        throw new Error('Failed to insert new OTP');
-      }
-      console.log('New OTP inserted successfully for:', sanitizedEmail);
-  
-      // Send the OTP email
-      await sendOTPEmail(sanitizedEmail, otp, 'password reset'); // Send to sanitized email
-      console.log('OTP email sent successfully to:', sanitizedEmail);
-  
-      res.status(200).json({ message: 'OTP sent for password reset. Please check your email.' });
+        if (!email) {
+            return res.status(400).json({ error: 'Email is required.' });
+        }
+
+        // Normalize the email to lowercase for consistency
+        const sanitizedEmail = email.trim().toLowerCase();
+
+        // Step 1: Check if email exists in the users table
+        const { data: user, error: userError } = await supabase
+            .from('users')
+            .select('id') // Select only the 'id' field for verification
+            .eq('email', sanitizedEmail)
+            .single(); // Expect only one user
+
+        if (userError && userError.code !== 'PGRST116') {
+            console.error('Error checking user existence:', userError.message);
+            throw new Error('Error checking user existence.');
+        }
+
+        if (!user) {
+            // If user with the provided email does not exist
+            return res.status(404).json({ error: 'No account found with this email address.' });
+        }
+
+        // Step 2: Generate a new OTP
+        const otp = generateOTP(); // Generate a new OTP
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
+        console.log('Generated OTP and expiration time:', { otp, expiresAt });
+
+        // Step 3: Delete existing OTPs for the same email and purpose
+        const { error: deleteError } = await supabase
+            .from('otps')
+            .delete()
+            .match({ email: sanitizedEmail, purpose: 'password_reset' });
+
+        if (deleteError) {
+            console.error('Error deleting existing OTPs:', deleteError.message);
+            throw new Error('Failed to delete previous OTPs.');
+        }
+        console.log('Old OTPs deleted successfully for:', sanitizedEmail);
+
+        // Step 4: Insert the new OTP into the database
+        const { error: insertError } = await supabase
+            .from('otps')
+            .insert([
+                {
+                    email: sanitizedEmail,
+                    otp,
+                    purpose: 'password_reset',
+                    expires_at: expiresAt,
+                },
+            ]);
+
+        if (insertError) {
+            console.error('Error inserting new OTP:', insertError.message);
+            throw new Error('Failed to insert new OTP.');
+        }
+        console.log('New OTP inserted successfully for:', sanitizedEmail);
+
+        // Step 5: Send the OTP email
+        await sendOTPEmail(sanitizedEmail, otp, 'password reset');
+        console.log('OTP email sent successfully to:', sanitizedEmail);
+
+        // Step 6: Respond with success
+        res.status(200).json({ message: 'OTP sent for password reset. Please check your email.' });
     } catch (err) {
-      console.error('Error in requestOTPForPasswordReset:', err.message);
-      res.status(400).json({ error: 'Request OTP failed', details: err.message });
+        console.error('Error in requestOTPForPasswordReset:', err.message);
+        res.status(400).json({ error: 'Request OTP failed.', details: err.message });
     }
-  };  
+};
 
 // Reset Password with OTP
 const resetPasswordWithOTP = async (req, res) => {
