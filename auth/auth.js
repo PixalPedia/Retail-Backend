@@ -255,12 +255,12 @@ const login = async (req, res) => {
             return res.status(401).json({ error: 'Invalid email or password.' });
         }
 
-        // Check if the user's email is verified
+        // **Check if the user's email is verified**
         if (!user.is_verified) {
             return res.status(403).json({ error: 'Email not verified. Please verify your email to log in.' });
         }
 
-        // Compare the provided password with the hashed password from the database
+        // **Compare the provided password with the hashed password from the database**
         const isPasswordCorrect = await bcrypt.compare(password, user.password);
         if (!isPasswordCorrect) {
             // Handle failed login attempt for incorrect password
