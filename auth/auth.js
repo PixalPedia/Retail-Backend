@@ -227,7 +227,7 @@ const login = async (req, res) => {
         // Fetch the user from the database
         const { data: user, error: userError } = await supabase
             .from('users')
-            .select('id, username, email, password') // Fetch only necessary fields
+            .select('id, username, email, password, is_verified') // Include verification status
             .eq('email', sanitizedEmail)
             .single();
 
@@ -253,6 +253,11 @@ const login = async (req, res) => {
             }
 
             return res.status(401).json({ error: 'Invalid email or password.' });
+        }
+
+        // Check if the user's email is verified
+        if (!user.is_verified) {
+            return res.status(403).json({ error: 'Email not verified. Please verify your email to log in.' });
         }
 
         // Compare the provided password with the hashed password from the database
