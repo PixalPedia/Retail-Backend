@@ -219,6 +219,7 @@ const signup = async (req, res) => {
 };
 
 // Login function
+// Login function
 const login = async (req, res) => {
     const { email, password } = req.body;
     const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
@@ -229,18 +230,24 @@ const login = async (req, res) => {
             return res.status(400).json({ error: 'Email and password are required.' });
         }
 
-        // Check if the email is verified
-        const { verified, error: verificationError } = await isEmailVerified(email);
-        if (verificationError) {
-            console.error('Verification Error:', verificationError);
-            return res.status(500).json({ error: 'Enter a Vailed Email Address.' });
-        }
-        if (!verified) {
-            return res.status(403).json({ error: 'Email not verified. Please verify your email to log in.' });
-        }
-
         // Normalize the email
         const sanitizedEmail = email.trim().toLowerCase();
+
+        // Check if the user exists
+        const { data: user, error: userError } = await supabase
+            .from('users')
+            .select('id, username, email, password, is_email_verified') // Ensure 'is_email_verified' is included
+            .eq('email', sanitizedEmail)
+            .single();
+
+        if (userError || !user) {
+            return res.status(404).json({ error: 'User does not exist. Please register first.' });
+        }
+
+        // Check if the email is verified
+        if (!user.is_email_verified) {
+            return res.status(403).json({ error: 'Email not verified. Please verify your email to log in.' });
+        }
 
         // Fetch failed login attempts from the database
         const { data: attemptRecord, error: attemptError } = await supabase
@@ -260,18 +267,6 @@ const login = async (req, res) => {
             return res.status(403).json({
                 error: `Too many failed attempts. Account is locked. Try again after ${lockRemaining} minutes.`,
             });
-        }
-
-        // Fetch the user from the database
-        const { data: user, error: userError } = await supabase
-            .from('users')
-            .select('id, username, email, password')
-            .eq('email', sanitizedEmail)
-            .single();
-
-        if (userError || !user) {
-            await handleFailedLogin(sanitizedEmail, ip, attemptRecord);
-            return res.status(401).json({ error: 'Invalid email or password.' });
         }
 
         // Compare the provided password with the hashed password from the database
@@ -313,41 +308,6 @@ const login = async (req, res) => {
     } catch (err) {
         console.error('Login Error:', err.message);
         res.status(500).json({ error: 'Login failed. Please try again.', details: err.message });
-    }
-};
-
-// Helper function: Calculate lock remaining time
-const calculateLockRemaining = (lockedUntil) => {
-    return Math.ceil((new Date(lockedUntil).getTime() - Date.now()) / 60000); // Remaining minutes
-};
-
-// Helper function: Handle failed login attempt
-const handleFailedLogin = async (email, ip, attemptRecord) => {
-    const newFailedAttempts = attemptRecord ? attemptRecord.failed_attempts + 1 : 1;
-    const lockUntil = newFailedAttempts >= 5 ? new Date(Date.now() + 30 * 60 * 1000) : null; // Lock for 30 minutes after 5 failed attempts
-
-    if (attemptRecord) {
-        // Update failed login attempts in the database
-        await supabase
-            .from('failed_login_attempts')
-            .update({
-                failed_attempts: newFailedAttempts,
-                locked_until: lockUntil,
-            })
-            .eq('email', email)
-            .eq('ip_address', ip);
-    } else {
-        // Insert new failed login attempt record
-        await supabase
-            .from('failed_login_attempts')
-            .insert([
-                {
-                    email,
-                    ip_address: ip,
-                    failed_attempts: 1,
-                    locked_until: null,
-                },
-            ]);
     }
 };
 
