@@ -384,7 +384,7 @@ const verifyEmailWithOTP = async (req, res) => {
 // Request OTP for password reset
 const requestOTPForPasswordReset = async (req, res) => {
     const { email } = req.body;
-
+  
     try {
         if (!email) {
             return res.status(400).json({ error: 'Email is required.' });
@@ -396,17 +396,18 @@ const requestOTPForPasswordReset = async (req, res) => {
         // Step 1: Check if email exists in the users table
         const { data: user, error: userError } = await supabase
             .from('users')
-            .select('email') // Focus on selecting the email
+            .select('id') // Select only the 'id' field for verification
             .eq('email', sanitizedEmail)
-            .single(); // Expect exactly one user
+            .single(); // Expect only one user
 
-        if (userError) {
-            if (userError.code === 'PGRST116') { // No match found
-                return res.status(404).json({ error: 'No account found with this email address.' });
-            } else {
-                console.error('Error checking user existence:', userError.message);
-                throw new Error('Error checking user existence.');
-            }
+        if (userError && userError.code !== 'PGRST116') {
+            console.error('Error checking user existence:', userError.message);
+            throw new Error('Error checking user existence.');
+        }
+
+        if (!user) {
+            // If user with the provided email does not exist
+            return res.status(404).json({ error: 'No account found with this email address.' });
         }
 
         // Step 2: Generate a new OTP
