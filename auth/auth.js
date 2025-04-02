@@ -233,7 +233,7 @@ const login = async (req, res) => {
         const { verified, error: verificationError } = await isEmailVerified(email);
         if (verificationError) {
             console.error('Verification Error:', verificationError);
-            return res.status(500).json({ error: 'An error occurred during verification.' });
+            return res.status(500).json({ error: 'Enter a Vailed Email Address.' });
         }
         if (!verified) {
             return res.status(403).json({ error: 'Email not verified. Please verify your email to log in.' });
