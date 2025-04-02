@@ -88,7 +88,21 @@ const signup = async (req, res) => {
         const sanitizedEmail = email.trim().toLowerCase(); // Convert email to lowercase
         const sanitizedUsername = username.trim();
 
-        // Step 1: Rate-limiting
+        // Step 1: Check if email already exists
+        const { data: existingUser, error: existingUserError } = await supabase
+            .from('users')
+            .select('id')
+            .eq('email', sanitizedEmail)
+            .single();
+
+        if (existingUserError && existingUserError.code !== 'PGRST116') throw existingUserError;
+
+        if (existingUser) {
+            // If email already exists
+            return res.status(409).json({ error: 'Email already exists. Please use a different email address.' });
+        }
+
+        // Step 2: Rate-limiting
         const { data: signupData, error: signupError } = await supabase
             .from('signup_limits')
             .select('*')
@@ -132,10 +146,10 @@ const signup = async (req, res) => {
                 ]);
         }
 
-        // Step 2: Hash the password
+        // Step 3: Hash the password
         const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Step 3: Insert the user into the database
+        // Step 4: Insert the user into the database
         const { data: userData, error: userError } = await supabase
             .from('users')
             .insert([{ email: sanitizedEmail, password: hashedPassword, username: sanitizedUsername }])
@@ -143,7 +157,7 @@ const signup = async (req, res) => {
 
         if (userError) throw userError;
 
-        // Step 4: Generate OTP for email verification
+        // Step 5: Generate OTP for email verification
         const otp = generateOTP();
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
         console.log('Generated OTP and expiration time:', { otp, expiresAt });
@@ -163,7 +177,7 @@ const signup = async (req, res) => {
 
         if (otpError) throw otpError;
 
-        // Step 5: Respond with success
+        // Step 6: Respond with success
         res.status(201).json({
             message: 'Signup successful! Please verify your email using the OTP sent to your email.',
             user: {
