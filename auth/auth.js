@@ -111,7 +111,7 @@ const signup = async (req, res) => {
         }
 
         // Normalize email and username
-        const sanitizedEmail = email.trim().toLowerCase(); // Convert email to lowercase
+        const sanitizedEmail = email.trim().toLowerCase();
         const sanitizedUsername = username.trim();
 
         // Step 1: Check if email already exists
@@ -124,7 +124,6 @@ const signup = async (req, res) => {
         if (existingUserError && existingUserError.code !== 'PGRST116') throw existingUserError;
 
         if (existingUser) {
-            // If email already exists
             return res.status(409).json({ error: 'Email already exists. Please use a different email address.' });
         }
 
@@ -133,13 +132,12 @@ const signup = async (req, res) => {
             .from('signup_limits')
             .select('*')
             .eq('ip_address', ip)
-            .eq('email', sanitizedEmail) // Use normalized email for consistency
+            .eq('email', sanitizedEmail)
             .single();
 
         if (signupError && signupError.code !== 'PGRST116') throw signupError;
 
         if (signupData) {
-            // Check if max attempts (5 per hour) have been exceeded
             const attemptsExceeded =
                 signupData.attempts >= 5 &&
                 Date.now() - new Date(signupData.last_attempt).getTime() < 60 * 60 * 1000;
@@ -159,13 +157,13 @@ const signup = async (req, res) => {
                 })
                 .eq('id', signupData.id);
         } else {
-            // Insert a new record for signup attempts if it doesn't exist
+            // Insert a new record for signup attempts
             await supabase
                 .from('signup_limits')
                 .insert([
                     {
                         ip_address: ip,
-                        email: sanitizedEmail, // Use normalized email
+                        email: sanitizedEmail,
                         attempts: 1,
                         last_attempt: new Date(),
                     },
@@ -183,31 +181,42 @@ const signup = async (req, res) => {
 
         if (userError) throw userError;
 
-        // Step 5: Generate OTP for email verification
+        // Step 5: Delete any existing OTPs for email verification
+        const { error: deleteOtpError } = await supabase
+            .from('otps')
+            .delete()
+            .eq('email', sanitizedEmail)
+            .eq('purpose', 'email_verification');
+
+        if (deleteOtpError) throw deleteOtpError;
+
+        // Step 6: Generate OTP for email verification
         const otp = generateOTP();
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
         console.log('Generated OTP and expiration time:', { otp, expiresAt });
 
-        // Send OTP email and store it in the database
-        await sendOTPEmail(sanitizedEmail, otp, 'email verification'); // Always send to normalized email
-        const { error: otpError } = await supabase
+        // Insert the new OTP
+        const { error: insertOtpError } = await supabase
             .from('otps')
             .insert([
                 {
-                    email: sanitizedEmail, // Store normalized email in OTP table
+                    email: sanitizedEmail,
                     otp,
                     purpose: 'email_verification',
                     expires_at: expiresAt,
                 },
             ]);
 
-        if (otpError) throw otpError;
+        if (insertOtpError) throw insertOtpError;
 
-        // Step 6: Respond with success
+        // Send OTP email
+        await sendOTPEmail(sanitizedEmail, otp, 'email verification');
+
+        // Step 7: Respond with success
         res.status(201).json({
             message: 'Signup successful! Please verify your email using the OTP sent to your email.',
             user: {
-                id: userData[0].id, // UUID or ID from the database
+                id: userData[0].id,
                 email: sanitizedEmail,
                 username: sanitizedUsername,
             },
@@ -218,7 +227,6 @@ const signup = async (req, res) => {
     }
 };
 
-// Login function
 // Login function
 const login = async (req, res) => {
     const { email, password } = req.body;
