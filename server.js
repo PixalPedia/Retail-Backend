@@ -19,7 +19,7 @@ app.use(
         'http://127.0.0.1:5500', // Exact IP used by Live Server
         process.env.FRONTEND_URL || 'https://your-deployed-frontend-url.com' // Deployed frontend
       ],
-      methods: ['GET', 'POST', 'DELETE'], // Allowed methods
+      methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], // Allowed methods
       allowedHeaders: ['Content-Type', 'Authorization'], // Necessary headers
       credentials: true, // Allow credentials if needed
     })
