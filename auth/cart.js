@@ -546,4 +546,64 @@ router.post('/place/order', async (req, res) => {
     }
 });
 
+// Update Quantity in Cart
+router.post('/update-quantity', async (req, res) => {
+    const { user_id, cart_id, quantity } = req.body;
+
+    // Validate input
+    if (!user_id || !cart_id || !quantity || quantity <= 0) {
+        return res.status(400).json({ error: 'User ID, Cart ID, and valid quantity are required.' });
+    }
+
+    try {
+        // Fetch the cart item to ensure it exists and belongs to the user
+        const { data: cartItem, error: cartError } = await supabase
+            .from('cart')
+            .select('product_id, final_price') // Fetch necessary fields
+            .eq('id', cart_id)
+            .eq('user_id', user_id)
+            .single();
+
+        if (cartError || !cartItem) {
+            console.error('Error fetching cart item:', cartError?.message || 'Cart item not found.');
+            return res.status(404).json({ error: 'Cart item not found or does not belong to the user.' });
+        }
+
+        // Fetch the product price from the database for recalculating final price
+        const { data: productData, error: productError } = await supabase
+            .from('products')
+            .select('price') // Fetch product price
+            .eq('id', cartItem.product_id)
+            .single();
+
+        if (productError || !productData) {
+            console.error('Error fetching product price:', productError?.message || 'Product not found.');
+            return res.status(404).json({ error: 'Product not found for the cart item.' });
+        }
+
+        const newFinalPrice = productData.price * quantity;
+
+        // Update the quantity and final price in the cart
+        const { data: updatedCartItem, error: updateError } = await supabase
+            .from('cart')
+            .update({ quantity, final_price: newFinalPrice, updated_at: new Date().toISOString() })
+            .eq('id', cart_id)
+            .select()
+            .single();
+
+        if (updateError || !updatedCartItem) {
+            console.error('Error updating cart item:', updateError?.message || 'Update failed.');
+            return res.status(500).json({ error: 'Failed to update cart item.' });
+        }
+
+        // Respond with the updated cart item
+        res.status(200).json({
+            message: 'Cart item updated successfully!',
+            cart_item: updatedCartItem,
+        });
+    } catch (err) {
+        console.error('Unexpected error updating cart item:', err.message);
+        res.status(500).json({ error: 'Internal server error.' });
+    }
+});
 module.exports = router;
