@@ -13,17 +13,17 @@ app.use(express.json());
 
 // CORS configuration
 app.use(
-    cors({
-      origin: [
-        'http://localhost:3000', // Localhost shorthand
-        'http://127.0.0.1:5500', // Exact IP used by Live Server
-        process.env.FRONTEND_URL || 'https://your-deployed-frontend-url.com' // Deployed frontend
-      ],
-      methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], // Allowed methods
-      allowedHeaders: ['Content-Type', 'Authorization'], // Necessary headers
-      credentials: true, // Allow credentials if needed
-    })
-  );
+  cors({
+    origin: [
+      'http://localhost:3000', // Localhost shorthand
+      'http://127.0.0.1:5500', // Exact IP used by Live Server
+      process.env.FRONTEND_URL || 'https://your-deployed-frontend-url.com' // Deployed frontend
+    ],
+    methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH'], // Allowed methods
+    allowedHeaders: ['Content-Type', 'Authorization'], // Necessary headers
+    credentials: true, // Allow credentials if needed
+  })
+);
 
 // Import authentication-related controllers from auth.js
 const {
@@ -45,6 +45,7 @@ const infoRouter = require('./auth/info'); // Info routes
 const typeRoutes = require('./auth/type'); // Type routes
 const cartRoutes = require('./auth/cart'); // Cart routes
 const posterRoutes = require('./auth/poster'); // Poster routes
+const typeComboRoutes = require('./auth/typecombo'); // Type combo routes
 
 // Authentication Routes
 app.post('/signup', signup); // User signup
@@ -64,9 +65,10 @@ app.use('/api/info', infoRouter); // Endpoints for fetching user info
 app.use('/api/type', typeRoutes); // Endpoints for type-related operations
 app.use('/api/cart', cartRoutes); // Endpoints for cart-related operations
 app.use('/api/posters', posterRoutes); // Endpoints for poster-related operations
+app.use('/api/type-combo', typeComboRoutes); // Endpoints for type combo-related operations
 
 // Start the server
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     const renderUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
     console.log(`🚀 Server is running at: ${renderUrl}`);
