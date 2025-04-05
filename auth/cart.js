@@ -107,6 +107,7 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
 };
 
 // Add Product to Cart
+// Add Product to Cart
 router.post('/add', async (req, res) => {
     const { user_id, product_id, option_ids, quantity } = req.body;
 
@@ -134,7 +135,7 @@ router.post('/add', async (req, res) => {
         }
 
         // Check if the product has associated options
-        const validOptionIds = product.options.map(option => option.option_id);
+        const validOptionIds = product.options?.map(option => option.option_id) || [];
         const hasOptions = validOptionIds.length > 0;
 
         // Make options mandatory if the product has associated options
@@ -149,21 +150,39 @@ router.post('/add', async (req, res) => {
             }
         }
 
-        // Fetch combo price for the selected product and options
-        const { data: comboData, error: comboError } = await supabase
-            .from('types_combo')
-            .select('combo_price')
-            .eq('product_id', product_id)
-            .eq('options', `{${option_ids.join(',')}}`)
-            .single();
+        let finalPrice;
 
-        if (comboError || !comboData) {
-            console.error(`Error fetching combo price for product ID ${product_id} and selected options:`, comboError?.message || 'Combo not found.');
-            return res.status(400).json({ error: 'The selected combo is not available.' });
+        // Fetch combo price only if option_ids are provided and valid
+        if (Array.isArray(option_ids) && option_ids.length > 0) {
+            const { data: comboData, error: comboError } = await supabase
+                .from('types_combo')
+                .select('combo_price')
+                .eq('product_id', product_id)
+                .eq('options', `{${option_ids.join(',')}}`)
+                .single();
+
+            if (comboError || !comboData) {
+                console.error(`Error fetching combo price for product ID ${product_id} and selected options:`, comboError?.message || 'Combo not found.');
+                return res.status(400).json({ error: 'The selected combo is not available.' });
+            }
+
+            // Calculate final price based on the combo price and quantity
+            finalPrice = comboData.combo_price * quantity;
+        } else {
+            // If no combo price is required, calculate the price as a default fallback
+            const { data: productPrice, error: priceError } = await supabase
+                .from('products')
+                .select('price') // Ensure price is fetched for products without options
+                .eq('id', product_id)
+                .single();
+
+            if (priceError || !productPrice) {
+                console.error(`Error fetching price for product ID ${product_id}:`, priceError?.message || 'Price not found.');
+                return res.status(400).json({ error: 'Unable to retrieve product price.' });
+            }
+
+            finalPrice = productPrice.price * quantity;
         }
-
-        // Calculate final price based on the combo price and quantity
-        const finalPrice = comboData.combo_price * quantity;
 
         // Insert product into the cart with the final price
         const { data: cartItem, error: cartInsertError } = await supabase
@@ -180,7 +199,7 @@ router.post('/add', async (req, res) => {
         const cartItemId = cartItem.id;
 
         // Insert options into the cart_item_options table (if applicable)
-        if (hasOptions) {
+        if (hasOptions && Array.isArray(option_ids) && option_ids.length > 0) {
             const cartItemOptions = option_ids.map(optionId => ({
                 cart_item_id: cartItemId,
                 option_id: optionId
@@ -207,6 +226,7 @@ router.post('/add', async (req, res) => {
         res.status(500).json({ error: 'Internal server error.' });
     }
 });
+
 
 // Fetch Cart Items
 router.post('/fetch', async (req, res) => {
