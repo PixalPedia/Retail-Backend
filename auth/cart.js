@@ -15,27 +15,31 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
 
     // Parse delivery_address if it's a string
     let deliveryAddress = order.delivery_address;
-    if (typeof order.delivery_address === 'string') {
-        try {
-            deliveryAddress = JSON.parse(order.delivery_address);
-        } catch (error) {
-            console.error('Error parsing delivery address JSON:', error.message);
-            deliveryAddress = null; // Default to null if parsing fails
-        }
+    try {
+        deliveryAddress = typeof order.delivery_address === 'string'
+            ? JSON.parse(order.delivery_address)
+            : order.delivery_address;
+    } catch (error) {
+        console.error('Error parsing delivery address JSON:', error.message);
+        deliveryAddress = { address_line_1: 'Unknown', city: 'Unknown', state: 'Unknown', country: 'Unknown', postal_code: 'N/A', phone_number: 'N/A' };
     }
+
+    // Calculate total order amount
+    const totalOrderAmount = items.reduce((sum, item) => sum + item.price, 0);
 
     // Map items for display in the email
     const itemRows = items.map((item) => {
+        // Format options column as "type_name: option_name"
         const options = item.options && item.options.length > 0
             ? item.options.map(opt => `${opt.type_name}: ${opt.name}`).join(', ')
-            : 'N/A';
+            : 'Not Specified';
 
         return `
             <tr>
                 <td style="border: 1px solid #ddd; padding: 10px;">${item.title}</td>
                 <td style="border: 1px solid #ddd; padding: 10px;">${options}</td>
                 <td style="border: 1px solid #ddd; padding: 10px;">${item.quantity}</td>
-                <td style="border: 1px solid #ddd; padding: 10px;">₹${(item.price * item.quantity).toFixed(2)}</td>
+                <td style="border: 1px solid #ddd; padding: 10px;">₹${item.price.toFixed(2)}</td>
             </tr>
         `;
     }).join('');
@@ -44,10 +48,10 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
     const deliveryDetails = order.delivery_type === "Delivery" && deliveryAddress
         ? `
             <h3 style="font-size: 16px; color: #333;">Delivery Address:</h3>
-            <p><strong>${deliveryAddress.address_line_1}</strong></p>
+            <p><strong>${deliveryAddress.address_line_1 || 'Unknown'}</strong></p>
             ${deliveryAddress.address_line_2 ? `<p>${deliveryAddress.address_line_2}</p>` : ""}
-            <p>${deliveryAddress.city}, ${deliveryAddress.state}, ${deliveryAddress.country} - ${deliveryAddress.postal_code}</p>
-            <p><strong>Phone:</strong> ${deliveryAddress.phone_number}</p>
+            <p>${deliveryAddress.city || 'Unknown'}, ${deliveryAddress.state || 'Unknown'}, ${deliveryAddress.country || 'Unknown'} - ${deliveryAddress.postal_code || 'N/A'}</p>
+            <p><strong>Phone:</strong> ${deliveryAddress.phone_number || 'N/A'}</p>
         `
         : `
             <h3 style="font-size: 16px; color: #333;">Pickup Information:</h3>
@@ -65,8 +69,8 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
                 <p><strong>Order ID:</strong> ${order.id}</p>
                 <p><strong>Placed By:</strong> ${userName}</p>
                 <p><strong>Managed By:</strong> ${superuserName}</p>
-                <p><strong>Status:</strong> ${order.order_status}</p>
-                <p><strong>Created At:</strong> ${new Date(order.created_at).toLocaleString()}</p>
+                <p><strong>Status:</strong> ${order.order_status || 'Pending'}</p>
+                <p><strong>Created At:</strong> ${order.created_at ? new Date(order.created_at).toLocaleString() : 'N/A'}</p>
                 
                 ${deliveryDetails}
                 
@@ -77,13 +81,15 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
                             <th style="border: 1px solid #ddd; padding: 10px;">Product</th>
                             <th style="border: 1px solid #ddd; padding: 10px;">Options</th>
                             <th style="border: 1px solid #ddd; padding: 10px;">Quantity</th>
-                            <th style="border: 1px solid #ddd; padding: 10px;">Total Price</th>
+                            <th style="border: 1px solid #ddd; padding: 10px;">Price</th>
                         </tr>
                     </thead>
                     <tbody>
                         ${itemRows}
                     </tbody>
                 </table>
+
+                <p><strong>Total Order Amount:</strong> ₹${totalOrderAmount.toFixed(2)}</p>
 
                 <p style="margin-top: 20px; font-size: 14px; color: #666;">Thank you for shopping with us! If you have questions, feel free to contact our support team.</p>
             </div>
@@ -95,7 +101,7 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
         await transporter.sendMail(mailOptions);
         console.log(`Order details email sent to ${email}`);
     } catch (err) {
-        console.error('Error sending order details email:', err.message);
+        console.error(`Error sending email to ${email} (Order ID: ${order.id}):`, err.message);
         throw new Error('Failed to send order details email.');
     }
 };
@@ -143,10 +149,26 @@ router.post('/add', async (req, res) => {
             }
         }
 
-        // Insert product into the cart
+        // Fetch combo price for the selected product and options
+        const { data: comboData, error: comboError } = await supabase
+            .from('types_combo')
+            .select('combo_price')
+            .eq('product_id', product_id)
+            .eq('options', `{${option_ids.join(',')}}`)
+            .single();
+
+        if (comboError || !comboData) {
+            console.error(`Error fetching combo price for product ID ${product_id} and selected options:`, comboError?.message || 'Combo not found.');
+            return res.status(400).json({ error: 'The selected combo is not available.' });
+        }
+
+        // Calculate final price based on the combo price and quantity
+        const finalPrice = comboData.combo_price * quantity;
+
+        // Insert product into the cart with the final price
         const { data: cartItem, error: cartInsertError } = await supabase
             .from('cart')
-            .insert([{ user_id, product_id, quantity }])
+            .insert([{ user_id, product_id, quantity, final_price: finalPrice }]) // Add final_price
             .select()
             .single();
 
@@ -186,7 +208,6 @@ router.post('/add', async (req, res) => {
     }
 });
 
-
 // Fetch Cart Items
 router.post('/fetch', async (req, res) => {
     const { user_id } = req.body;
@@ -204,19 +225,25 @@ router.post('/fetch', async (req, res) => {
                 id,
                 product_id,
                 quantity,
+                final_price,
                 created_at,
                 updated_at,
                 products (
                     id,
                     title,
                     description,
-                    price,
                     images,
                     stock_quantity
                 ),
                 cart_item_options (
                     option_id,
-                    options(option_name, type_id, types(type_name))
+                    options (
+                        option_name,
+                        type_id,
+                        types (
+                            type_name
+                        )
+                    )
                 )
             `)
             .eq('user_id', user_id);
@@ -234,7 +261,6 @@ router.post('/fetch', async (req, res) => {
                 id: cartItem.products.id,
                 title: cartItem.products.title,
                 description: cartItem.products.description,
-                price: cartItem.products.price,
                 images: cartItem.products.images,
                 stock_quantity: cartItem.products.stock_quantity
             },
@@ -245,6 +271,7 @@ router.post('/fetch', async (req, res) => {
                 type_name: option.options.types.type_name,
             })),
             quantity: cartItem.quantity,
+            final_price: cartItem.final_price,
             created_at: cartItem.created_at,
             updated_at: cartItem.updated_at
         }));
@@ -259,6 +286,7 @@ router.post('/fetch', async (req, res) => {
         res.status(500).json({ error: 'Internal server error.' });
     }
 });
+
 
 // Delete Product from Cart
 router.delete('/delete', async (req, res) => {
@@ -316,6 +344,7 @@ router.delete('/delete', async (req, res) => {
 });
 
 // Place Order from Cart
+// Place Order from Cart
 router.post('/place/order', async (req, res) => {
     const { user_id, delivery_type } = req.body;
 
@@ -329,21 +358,27 @@ router.post('/place/order', async (req, res) => {
     }
 
     try {
-        // Fetch cart items with associated options
+        // Fetch cart items with associated options and final price
         const { data: cartItems, error: cartError } = await supabase
             .from('cart')
             .select(`
                 id,
                 product_id,
                 quantity,
+                final_price, 
                 cart_item_options (
                     option_id,
-                    options(option_name, type_id, types(type_name))
+                    options (
+                        option_name,
+                        type_id,
+                        types (
+                            type_name
+                        )
+                    )
                 ),
                 products (
                     id,
                     title,
-                    price,
                     images
                 )
             `)
@@ -410,7 +445,7 @@ router.post('/place/order', async (req, res) => {
             order_id: orderId,
             product_id: cartItem.product_id,
             title: cartItem.products.title,
-            price: cartItem.products.price,
+            price: cartItem.final_price, // Use the final_price from the cart table
             images: cartItem.products.images,
             options: cartItem.cart_item_options?.map(option => ({
                 id: option.option_id,
