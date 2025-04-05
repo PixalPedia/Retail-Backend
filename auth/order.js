@@ -67,27 +67,31 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
 
     // Parse delivery_address if it's a string
     let deliveryAddress = order.delivery_address;
-    if (typeof order.delivery_address === 'string') {
-        try {
-            deliveryAddress = JSON.parse(order.delivery_address);
-        } catch (error) {
-            console.error('Error parsing delivery address JSON:', error.message);
-            deliveryAddress = null; // Default to null if parsing fails
-        }
+    try {
+        deliveryAddress = typeof order.delivery_address === 'string'
+            ? JSON.parse(order.delivery_address)
+            : order.delivery_address;
+    } catch (error) {
+        console.error('Error parsing delivery address JSON:', error.message);
+        deliveryAddress = { address_line_1: 'Unknown', city: 'Unknown', state: 'Unknown', country: 'Unknown', postal_code: 'N/A', phone_number: 'N/A' };
     }
+
+    // Calculate total order amount
+    const totalOrderAmount = items.reduce((sum, item) => sum + (item.final_price || 0), 0);
 
     // Map items for display in the email
     const itemRows = items.map((item) => {
+        // Format options column as "type_name: option_name"
         const options = item.options && item.options.length > 0
-            ? item.options.map(opt => `${opt.type_name}: ${opt.name}`).join(', ')
-            : 'N/A';
+            ? item.options.map(opt => `${opt.type_name}: ${opt.option_name}`).join(', ')
+            : 'Not Specified';
 
         return `
             <tr>
                 <td style="border: 1px solid #ddd; padding: 10px;">${item.title}</td>
                 <td style="border: 1px solid #ddd; padding: 10px;">${options}</td>
                 <td style="border: 1px solid #ddd; padding: 10px;">${item.quantity}</td>
-                <td style="border: 1px solid #ddd; padding: 10px;">₹${(item.price * item.quantity).toFixed(2)}</td>
+                <td style="border: 1px solid #ddd; padding: 10px;">₹${item.final_price ? item.final_price.toFixed(2) : '0.00'}</td>
             </tr>
         `;
     }).join('');
@@ -96,10 +100,10 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
     const deliveryDetails = order.delivery_type === "Delivery" && deliveryAddress
         ? `
             <h3 style="font-size: 16px; color: #333;">Delivery Address:</h3>
-            <p><strong>${deliveryAddress.address_line_1}</strong></p>
+            <p><strong>${deliveryAddress.address_line_1 || 'Unknown'}</strong></p>
             ${deliveryAddress.address_line_2 ? `<p>${deliveryAddress.address_line_2}</p>` : ""}
-            <p>${deliveryAddress.city}, ${deliveryAddress.state}, ${deliveryAddress.country} - ${deliveryAddress.postal_code}</p>
-            <p><strong>Phone:</strong> ${deliveryAddress.phone_number}</p>
+            <p>${deliveryAddress.city || 'Unknown'}, ${deliveryAddress.state || 'Unknown'}, ${deliveryAddress.country || 'Unknown'} - ${deliveryAddress.postal_code || 'N/A'}</p>
+            <p><strong>Phone:</strong> ${deliveryAddress.phone_number || 'N/A'}</p>
         `
         : `
             <h3 style="font-size: 16px; color: #333;">Pickup Information:</h3>
@@ -117,8 +121,8 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
                 <p><strong>Order ID:</strong> ${order.id}</p>
                 <p><strong>Placed By:</strong> ${userName}</p>
                 <p><strong>Managed By:</strong> ${superuserName}</p>
-                <p><strong>Status:</strong> ${order.order_status}</p>
-                <p><strong>Created At:</strong> ${new Date(order.created_at).toLocaleString()}</p>
+                <p><strong>Status:</strong> ${order.order_status || 'Pending'}</p>
+                <p><strong>Created At:</strong> ${order.created_at ? new Date(order.created_at).toLocaleString() : 'N/A'}</p>
                 
                 ${deliveryDetails}
                 
@@ -137,6 +141,8 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
                     </tbody>
                 </table>
 
+                <p><strong>Total Order Amount:</strong> ₹${totalOrderAmount.toFixed(2)}</p>
+
                 <p style="margin-top: 20px; font-size: 14px; color: #666;">Thank you for shopping with us! If you have questions, feel free to contact our support team.</p>
             </div>
         `,
@@ -147,7 +153,7 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
         await transporter.sendMail(mailOptions);
         console.log(`Order details email sent to ${email}`);
     } catch (err) {
-        console.error('Error sending order details email:', err.message);
+        console.error(`Error sending email to ${email} (Order ID: ${order.id}):`, err.message);
         throw new Error('Failed to send order details email.');
     }
 };
@@ -231,11 +237,11 @@ router.post('/create', async (req, res) => {
 
         const orderId = orderData.id;
 
-        // Process items and associated options
+        // Process items and fetch their combo prices, option names, and type names
         const detailedItems = await Promise.all(items.map(async (item) => {
             const { data: product, error: productError } = await supabase
                 .from('products')
-                .select('title, price, images')
+                .select('title, images')
                 .eq('id', item.product_id)
                 .single();
 
@@ -243,25 +249,58 @@ router.post('/create', async (req, res) => {
                 throw new Error(`Product with ID ${item.product_id} not found.`);
             }
 
-            const optionDetails = item.option_ids?.length > 0
-                ? await supabase
-                    .from('product_options')
-                    .select('option_id, options(option_name, type_id, types(type_name))')
-                    .in('option_id', item.option_ids)
-                : [];
+            // Check if the selected combo exists
+            const { data: comboData, error: comboError } = await supabase
+                .from('types_combo')
+                .select('combo_price')
+                .eq('product_id', item.product_id)
+                .eq('options', `{${item.option_ids.join(',')}}`)
+                .single();
+
+            if (comboError || !comboData) {
+                throw new Error(`The combo selected for product ID ${item.product_id} is not available.`);
+            }
+
+            // Fetch option names and their type names
+            const { data: optionData, error: optionError } = await supabase
+                .from('options')
+                .select('id, option_name, type_id')
+                .in('id', item.option_ids);
+
+            if (optionError || !optionData || optionData.length === 0) {
+                throw new Error(`Failed to fetch options for product ID ${item.product_id}.`);
+            }
+
+            // Map type_name to each option
+            const optionsWithTypes = await Promise.all(optionData.map(async (option) => {
+                const { data: typeData, error: typeError } = await supabase
+                    .from('types')
+                    .select('type_name')
+                    .eq('id', option.type_id)
+                    .single();
+
+                if (typeError || !typeData) {
+                    throw new Error(`Failed to fetch type name for type ID ${option.type_id}.`);
+                }
+
+                return {
+                    id: option.id,
+                    option_name: option.option_name,
+                    type_id: option.type_id,
+                    type_name: typeData.type_name,
+                };
+            }));
+
+            const finalPrice = comboData.combo_price * item.quantity;
 
             return {
                 order_id: orderId,
                 product_id: item.product_id,
                 title: product.title,
-                price: product.price,
+                price: comboData.combo_price,
+                final_price: finalPrice,
                 images: product.images,
-                options: optionDetails.data?.map(option => ({
-                    id: option.option_id,
-                    name: option.options.option_name,
-                    type_id: option.options.type_id,
-                    type_name: option.options.types.type_name,
-                })) || [],
+                options: optionsWithTypes,
                 quantity: item.quantity,
             };
         }));
@@ -270,7 +309,7 @@ router.post('/create', async (req, res) => {
         const orderItems = detailedItems.map(item => ({
             order_id: item.order_id,
             product_id: item.product_id,
-            price: item.price,
+            price: item.final_price,
             quantity: item.quantity,
         }));
 
@@ -302,7 +341,7 @@ router.post('/create', async (req, res) => {
             }
         }
 
-        // Notify user and send email
+        // Notify user and send email with both options and types
         await supabase.from('messages').insert([{
             order_id: orderId,
             sender: superuser_id,
@@ -520,11 +559,11 @@ router.post('/user/orders', async (req, res) => {
                     id,
                     product_id,
                     quantity,
+                    price, -- Fetch the actual price (final_price) from the orderitems table
                     products (
                         id,
                         title,
                         description,
-                        price,
                         images
                     ),
                     order_item_options (
@@ -560,11 +599,11 @@ router.post('/user/orders', async (req, res) => {
 
             // Format each order's items
             const formattedItems = order.orderitems.map(item => ({
-                order_item_id: item.id, // Rename `id` here instead of aliasing in the query
+                order_item_id: item.id,
                 product_id: item.product_id,
                 title: item.products.title,
                 description: item.products.description,
-                price: item.products.price,
+                price: item.price, // Use the price from the orderitems table
                 images: item.products.images,
                 options: item.order_item_options.map(option => ({
                     id: option.option_id,
@@ -576,7 +615,7 @@ router.post('/user/orders', async (req, res) => {
             }));
 
             return {
-                order_id: order.order_id,
+                order_id: order.id, // Fixed to use correct field
                 status: order.order_status,
                 created_at: order.created_at,
                 delivery_type: order.delivery_type,
@@ -612,11 +651,11 @@ router.get('/all', async (req, res) => {
                     id,
                     product_id,
                     quantity,
+                    price, -- Fetch the actual price (final_price) from the orderitems table
                     products (
                         id,
                         title,
                         description,
-                        price,
                         images
                     ),
                     order_item_options (
@@ -661,7 +700,7 @@ router.get('/all', async (req, res) => {
                 product_id: item.product_id,
                 title: item.products.title,
                 description: item.products.description,
-                price: item.products.price,
+                price: item.price, // Use the price from the orderitems table
                 images: item.products.images,
                 options: item.order_item_options.map(option => ({
                     id: option.option_id,
