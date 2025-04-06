@@ -442,6 +442,20 @@ router.post('/place/order', async (req, res) => {
 
         console.log('Cart Items:', cartItems);
 
+        // Fetch user's name
+        const { data: userData, error: userError } = await supabase
+            .from('users') // Assuming the table storing user information is called 'users'
+            .select('username') // Adjust column name if different
+            .eq('id', user_id)
+            .single();
+
+        if (userError || !userData) {
+            console.error('Error fetching user details:', userError?.message || 'User not found.');
+            return res.status(400).json({ error: 'Failed to retrieve user details for the order.' });
+        }
+
+        const userName = userData.username || 'Unknown User'; // Default fallback
+
         // Handle delivery type and address
         let deliveryAddress = null;
         if (delivery_type === 'Delivery') {
@@ -576,12 +590,12 @@ router.post('/place/order', async (req, res) => {
                 created_at: new Date().toISOString(),
             }]);
 
-        // Send email to the superuser only
+        // Send email with user name included
         await sendOrderDetailsEmail(
             superuser_email,
             { ...orderData, delivery_address: deliveryAddress },
             detailedItems,
-            null, // No need for the user name here
+            userName, // Pass the fetched user name here
             superuser_name // Include the superuser name
         );
 
