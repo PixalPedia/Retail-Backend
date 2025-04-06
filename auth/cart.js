@@ -425,10 +425,10 @@ router.post('/place/order', async (req, res) => {
             deliveryAddress = userInfo;
         }
 
-        // Fetch superuser information (ID and email)
+        // Fetch superuser information (ID, username, and email)
         const { data: superuserData, error: superuserError } = await supabase
             .from('superusers')
-            .select('id, email')
+            .select('id, username, email')
             .limit(1)
             .single();
 
@@ -439,6 +439,7 @@ router.post('/place/order', async (req, res) => {
 
         const superuser_id = superuserData.id;
         const superuser_email = superuserData.email;
+        const superuser_name = superuserData.username || 'Manager'; // Default fallback to Manager
 
         // Create a new order
         const { data: orderData, error: orderError } = await supabase
@@ -553,7 +554,8 @@ router.post('/place/order', async (req, res) => {
             user.email,
             { ...orderData, delivery_address: deliveryAddress },
             detailedItems,
-            user.username
+            user.username, // Pass the actual user name
+            superuser_name // Pass the actual superuser name
         );
 
         // Send email to the superuser
@@ -561,7 +563,8 @@ router.post('/place/order', async (req, res) => {
             superuser_email,
             { ...orderData, delivery_address: deliveryAddress },
             detailedItems,
-            'Manager'
+            user.username, // Include the actual user name
+            superuser_name // Include the actual superuser name
         );
 
         res.status(201).json({
@@ -574,6 +577,7 @@ router.post('/place/order', async (req, res) => {
         res.status(500).json({ error: 'Internal server error.' });
     }
 });
+
 // Update Quantity in Cart
 router.post('/update-quantity', async (req, res) => {
     const { user_id, cart_id, quantity } = req.body;
