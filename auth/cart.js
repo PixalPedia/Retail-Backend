@@ -107,7 +107,6 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
 };
 
 // Add Product to Cart
-// Add Product to Cart
 router.post('/add', async (req, res) => {
     const { user_id, product_id, option_ids, quantity } = req.body;
 
@@ -115,6 +114,41 @@ router.post('/add', async (req, res) => {
         // Validate input
         if (!user_id || !product_id || !quantity || quantity <= 0) {
             return res.status(400).json({ error: 'User ID, Product ID, and valid quantity are required.' });
+        }
+
+        // Check if the product is already in the cart
+        const { data: existingCartItem, error: existingCartError } = await supabase
+            .from('cart')
+            .select('*')
+            .eq('user_id', user_id)
+            .eq('product_id', product_id)
+            .single();
+
+        if (existingCartError && existingCartError.details !== 'Row not found') {
+            console.error('Error checking existing cart item:', existingCartError?.message);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
+
+        if (existingCartItem) {
+            // If product is already in the cart, update the quantity
+            const updatedQuantity = existingCartItem.quantity + quantity;
+
+            const { data: updatedCartItem, error: updateError } = await supabase
+                .from('cart')
+                .update({ quantity: updatedQuantity })
+                .eq('id', existingCartItem.id)
+                .select()
+                .single();
+
+            if (updateError) {
+                console.error('Error updating cart item:', updateError?.message);
+                return res.status(500).json({ error: 'Failed to update cart item quantity.' });
+            }
+
+            return res.status(200).json({
+                message: 'Cart item quantity updated successfully!',
+                cart_item: updatedCartItem
+            });
         }
 
         // Fetch product details along with its valid options
@@ -138,8 +172,8 @@ router.post('/add', async (req, res) => {
         const validOptionIds = product.options?.map(option => option.option_id) || [];
         const hasOptions = validOptionIds.length > 0;
 
-        // Make options mandatory if the product has associated options
         if (hasOptions) {
+            // Ensure options are valid
             if (!Array.isArray(option_ids) || option_ids.length === 0) {
                 return res.status(400).json({ error: 'Option IDs are mandatory for this product and cannot be empty.' });
             }
@@ -166,13 +200,12 @@ router.post('/add', async (req, res) => {
                 return res.status(400).json({ error: 'The selected combo is not available.' });
             }
 
-            // Calculate final price based on the combo price and quantity
             finalPrice = comboData.combo_price * quantity;
         } else {
-            // If no combo price is required, calculate the price as a default fallback
+            // Fallback to product price
             const { data: productPrice, error: priceError } = await supabase
                 .from('products')
-                .select('price') // Ensure price is fetched for products without options
+                .select('price')
                 .eq('id', product_id)
                 .single();
 
@@ -187,7 +220,7 @@ router.post('/add', async (req, res) => {
         // Insert product into the cart with the final price
         const { data: cartItem, error: cartInsertError } = await supabase
             .from('cart')
-            .insert([{ user_id, product_id, quantity, final_price: finalPrice }]) // Add final_price
+            .insert([{ user_id, product_id, quantity, final_price: finalPrice }])
             .select()
             .single();
 
@@ -198,7 +231,6 @@ router.post('/add', async (req, res) => {
 
         const cartItemId = cartItem.id;
 
-        // Insert options into the cart_item_options table (if applicable)
         if (hasOptions && Array.isArray(option_ids) && option_ids.length > 0) {
             const cartItemOptions = option_ids.map(optionId => ({
                 cart_item_id: cartItemId,
@@ -215,7 +247,6 @@ router.post('/add', async (req, res) => {
             }
         }
 
-        // Respond with success
         res.status(201).json({
             message: 'Product successfully added to cart!',
             cart_item: cartItem,
