@@ -155,9 +155,9 @@ router.post('/add', async (req, res) => {
             .select('id, quantity')
             .eq('user_id', user_id)
             .eq('product_id', product_id)
-            .single(); // Fetch one row for the specific product
+            .maybeSingle(); // Use maybeSingle() to handle no rows gracefully
 
-        if (existingCartError && existingCartError.details !== 'Row not found') {
+        if (existingCartError) {
             console.error('Error checking existing cart item:', existingCartError?.message);
             return res.status(500).json({ error: 'Internal server error.' });
         }
