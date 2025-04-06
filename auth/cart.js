@@ -116,47 +116,7 @@ router.post('/add', async (req, res) => {
             return res.status(400).json({ error: 'User ID, Product ID, and valid quantity are required.' });
         }
 
-        // Check if the product already exists in the cart (with matching options, if applicable)
-        let query = supabase
-            .from('cart')
-            .select('id, quantity, final_price')
-            .eq('user_id', user_id)
-            .eq('product_id', product_id);
-
-        if (Array.isArray(option_ids) && option_ids.length > 0) {
-            query = query.contains('option_ids', option_ids); // Match products with the same options
-        }
-
-        const { data: existingCartItem, error: existingCartError } = await query.maybeSingle();
-
-        if (existingCartError) {
-            console.error('Error checking existing cart item:', existingCartError?.message);
-            return res.status(500).json({ error: 'Internal server error.' });
-        }
-
-        if (existingCartItem) {
-            // If the product with matching options exists in the cart, update the quantity
-            const updatedQuantity = existingCartItem.quantity + quantity;
-
-            const { data: updatedCartItem, error: updateError } = await supabase
-                .from('cart')
-                .update({ quantity: updatedQuantity, updated_at: new Date() })
-                .eq('id', existingCartItem.id)
-                .select()
-                .single();
-
-            if (updateError) {
-                console.error('Error updating cart item quantity:', updateError?.message);
-                return res.status(500).json({ error: 'Failed to update cart item quantity.' });
-            }
-
-            return res.status(200).json({
-                message: 'Cart item quantity updated successfully!',
-                cart_item: updatedCartItem
-            });
-        }
-
-        // Fetch product details along with valid options
+        // Fetch product details along with its valid options
         const { data: product, error: productError } = await supabase
             .from('products')
             .select(`
@@ -173,10 +133,11 @@ router.post('/add', async (req, res) => {
             return res.status(404).json({ error: 'Product not found.' });
         }
 
-        // Validate options if applicable
+        // Check if the product has associated options
         const validOptionIds = product.options?.map(option => option.option_id) || [];
         const hasOptions = validOptionIds.length > 0;
 
+        // Make options mandatory if the product has associated options
         if (hasOptions) {
             if (!Array.isArray(option_ids) || option_ids.length === 0) {
                 return res.status(400).json({ error: 'Option IDs are mandatory for this product and cannot be empty.' });
@@ -188,11 +149,45 @@ router.post('/add', async (req, res) => {
             }
         }
 
-        // Calculate final price
+        // Check if the product already exists in the cart
+        const { data: existingCartItem, error: existingCartError } = await supabase
+            .from('cart')
+            .select('id, quantity')
+            .eq('user_id', user_id)
+            .eq('product_id', product_id)
+            .single(); // Fetch one row for the specific product
+
+        if (existingCartError && existingCartError.details !== 'Row not found') {
+            console.error('Error checking existing cart item:', existingCartError?.message);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
+
+        // If the product already exists, update the quantity
+        if (existingCartItem) {
+            const updatedQuantity = existingCartItem.quantity + quantity;
+
+            const { data: updatedCartItem, error: updateError } = await supabase
+                .from('cart')
+                .update({ quantity: updatedQuantity, updated_at: new Date() })
+                .eq('id', existingCartItem.id)
+                .select()
+                .single();
+
+            if (updateError) {
+                console.error('Error updating cart item:', updateError?.message);
+                return res.status(500).json({ error: 'Failed to update cart item quantity.' });
+            }
+
+            return res.status(200).json({
+                message: 'Cart item quantity updated successfully!',
+                cart_item: updatedCartItem
+            });
+        }
+
         let finalPrice;
 
+        // Fetch combo price only if option_ids are provided and valid
         if (Array.isArray(option_ids) && option_ids.length > 0) {
-            // Fetch combo price for selected options
             const { data: comboData, error: comboError } = await supabase
                 .from('types_combo')
                 .select('combo_price')
@@ -201,16 +196,17 @@ router.post('/add', async (req, res) => {
                 .single();
 
             if (comboError || !comboData) {
-                console.error(`Error fetching combo price for product ID ${product_id}:`, comboError?.message || 'Combo not found.');
+                console.error(`Error fetching combo price for product ID ${product_id} and selected options:`, comboError?.message || 'Combo not found.');
                 return res.status(400).json({ error: 'The selected combo is not available.' });
             }
 
+            // Calculate final price based on the combo price and quantity
             finalPrice = comboData.combo_price * quantity;
         } else {
-            // Default price for products without options
+            // If no combo price is required, calculate the price as a default fallback
             const { data: productPrice, error: priceError } = await supabase
                 .from('products')
-                .select('price')
+                .select('price') // Ensure price is fetched for products without options
                 .eq('id', product_id)
                 .single();
 
@@ -222,10 +218,10 @@ router.post('/add', async (req, res) => {
             finalPrice = productPrice.price * quantity;
         }
 
-        // Insert new product into the cart with the final price
+        // Insert product into the cart with the final price
         const { data: cartItem, error: cartInsertError } = await supabase
             .from('cart')
-            .insert([{ user_id, product_id, quantity, final_price: finalPrice, option_ids, created_at: new Date(), updated_at: new Date() }])
+            .insert([{ user_id, product_id, quantity, final_price: finalPrice }]) // Add final_price
             .select()
             .single();
 
@@ -234,10 +230,12 @@ router.post('/add', async (req, res) => {
             return res.status(500).json({ error: 'Failed to add product to cart.' });
         }
 
+        const cartItemId = cartItem.id;
+
         // Insert options into the cart_item_options table (if applicable)
         if (hasOptions && Array.isArray(option_ids) && option_ids.length > 0) {
             const cartItemOptions = option_ids.map(optionId => ({
-                cart_item_id: cartItem.id,
+                cart_item_id: cartItemId,
                 option_id: optionId
             }));
 
@@ -251,6 +249,7 @@ router.post('/add', async (req, res) => {
             }
         }
 
+        // Respond with success
         res.status(201).json({
             message: 'Product successfully added to cart!',
             cart_item: cartItem,
