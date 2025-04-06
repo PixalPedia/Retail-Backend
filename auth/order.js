@@ -206,10 +206,10 @@ router.post('/create', async (req, res) => {
             deliveryAddress = userInfo;
         }
 
-        // Fetch superuser ID and email
+        // Fetch superuser details (ID, username, email)
         const { data: superuserData, error: superuserError } = await supabase
             .from('superusers')
-            .select('id, email')
+            .select('id, username, email')
             .limit(1)
             .single();
 
@@ -219,6 +219,7 @@ router.post('/create', async (req, res) => {
 
         const superuser_id = superuserData.id;
         const superuser_email = superuserData.email;
+        const superuser_name = superuserData.username || 'Manager'; // Default to "Manager" if the name is unavailable
 
         // Create the order
         const { data: orderData, error: orderError } = await supabase
@@ -353,10 +354,10 @@ router.post('/create', async (req, res) => {
         }]);
 
         // Send email to the user
-        await sendOrderDetailsEmail(email, orderData, detailedItems, username);
+        await sendOrderDetailsEmail(email, orderData, detailedItems, username, superuser_name);
 
         // Send email to the superuser
-        await sendOrderDetailsEmail(superuser_email, orderData, detailedItems, 'Manager');
+        await sendOrderDetailsEmail(superuser_email, orderData, detailedItems, username, superuser_name);
 
         res.status(201).json({
             message: 'Order created successfully!',
@@ -367,6 +368,7 @@ router.post('/create', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
 
 
 // Cancel Order Items
