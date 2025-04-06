@@ -116,26 +116,31 @@ router.post('/add', async (req, res) => {
             return res.status(400).json({ error: 'User ID, Product ID, and valid quantity are required.' });
         }
 
-        // Check if the product is already in the cart
-        const { data: existingCartItem, error: existingCartError } = await supabase
+        // Check if the product is already in the cart, with the same options (if applicable)
+        let query = supabase
             .from('cart')
             .select('*')
             .eq('user_id', user_id)
-            .eq('product_id', product_id)
-            .single();
+            .eq('product_id', product_id);
 
-        if (existingCartError && existingCartError.details !== 'Row not found') {
+        if (Array.isArray(option_ids) && option_ids.length > 0) {
+            query = query.contains('option_ids', option_ids); // Match products with the same options
+        }
+
+        const { data: existingCartItem, error: existingCartError } = await query.maybeSingle();
+
+        if (existingCartError) {
             console.error('Error checking existing cart item:', existingCartError?.message);
             return res.status(500).json({ error: 'Internal server error.' });
         }
 
         if (existingCartItem) {
-            // If product is already in the cart, update the quantity
+            // If the product with matching options is already in the cart, update the quantity
             const updatedQuantity = existingCartItem.quantity + quantity;
 
             const { data: updatedCartItem, error: updateError } = await supabase
                 .from('cart')
-                .update({ quantity: updatedQuantity })
+                .update({ quantity: updatedQuantity, updated_at: new Date() })
                 .eq('id', existingCartItem.id)
                 .select()
                 .single();
@@ -151,11 +156,12 @@ router.post('/add', async (req, res) => {
             });
         }
 
-        // Fetch product details along with its valid options
+        // Fetch product details along with valid options
         const { data: product, error: productError } = await supabase
             .from('products')
             .select(`
                 id,
+                price,
                 options:product_options (
                     option_id
                 )
@@ -168,12 +174,11 @@ router.post('/add', async (req, res) => {
             return res.status(404).json({ error: 'Product not found.' });
         }
 
-        // Check if the product has associated options
+        // Validate options if applicable
         const validOptionIds = product.options?.map(option => option.option_id) || [];
         const hasOptions = validOptionIds.length > 0;
 
         if (hasOptions) {
-            // Ensure options are valid
             if (!Array.isArray(option_ids) || option_ids.length === 0) {
                 return res.status(400).json({ error: 'Option IDs are mandatory for this product and cannot be empty.' });
             }
@@ -184,10 +189,11 @@ router.post('/add', async (req, res) => {
             }
         }
 
+        // Calculate final price
         let finalPrice;
 
-        // Fetch combo price only if option_ids are provided and valid
         if (Array.isArray(option_ids) && option_ids.length > 0) {
+            // Fetch combo price for selected options
             const { data: comboData, error: comboError } = await supabase
                 .from('types_combo')
                 .select('combo_price')
@@ -196,55 +202,26 @@ router.post('/add', async (req, res) => {
                 .single();
 
             if (comboError || !comboData) {
-                console.error(`Error fetching combo price for product ID ${product_id} and selected options:`, comboError?.message || 'Combo not found.');
+                console.error(`Error fetching combo price for product ID ${product_id}:`, comboError?.message || 'Combo not found.');
                 return res.status(400).json({ error: 'The selected combo is not available.' });
             }
 
             finalPrice = comboData.combo_price * quantity;
         } else {
-            // Fallback to product price
-            const { data: productPrice, error: priceError } = await supabase
-                .from('products')
-                .select('price')
-                .eq('id', product_id)
-                .single();
-
-            if (priceError || !productPrice) {
-                console.error(`Error fetching price for product ID ${product_id}:`, priceError?.message || 'Price not found.');
-                return res.status(400).json({ error: 'Unable to retrieve product price.' });
-            }
-
-            finalPrice = productPrice.price * quantity;
+            // Default price for products without options
+            finalPrice = product.price * quantity;
         }
 
         // Insert product into the cart with the final price
         const { data: cartItem, error: cartInsertError } = await supabase
             .from('cart')
-            .insert([{ user_id, product_id, quantity, final_price: finalPrice }])
+            .insert([{ user_id, product_id, quantity, final_price: finalPrice, option_ids, created_at: new Date(), updated_at: new Date() }])
             .select()
             .single();
 
         if (cartInsertError || !cartItem) {
             console.error('Error adding product to cart:', cartInsertError?.message);
             return res.status(500).json({ error: 'Failed to add product to cart.' });
-        }
-
-        const cartItemId = cartItem.id;
-
-        if (hasOptions && Array.isArray(option_ids) && option_ids.length > 0) {
-            const cartItemOptions = option_ids.map(optionId => ({
-                cart_item_id: cartItemId,
-                option_id: optionId
-            }));
-
-            const { error: cartOptionsError } = await supabase
-                .from('cart_item_options')
-                .insert(cartItemOptions);
-
-            if (cartOptionsError) {
-                console.error('Error adding options for the cart item:', cartOptionsError?.message);
-                return res.status(500).json({ error: 'Failed to add options for the cart item.' });
-            }
         }
 
         res.status(201).json({
