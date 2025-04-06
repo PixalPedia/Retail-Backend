@@ -364,7 +364,6 @@ router.delete('/delete', async (req, res) => {
 });
 
 // Place Order from Cart
-// Place Order from Cart
 router.post('/place/order', async (req, res) => {
     const { user_id, delivery_type } = req.body;
 
@@ -426,19 +425,20 @@ router.post('/place/order', async (req, res) => {
             deliveryAddress = userInfo;
         }
 
-        // Fetch superuser ID
+        // Fetch superuser information (ID and email)
         const { data: superuserData, error: superuserError } = await supabase
             .from('superusers')
-            .select('id')
+            .select('id, email')
             .limit(1)
             .single();
 
         if (superuserError || !superuserData) {
-            console.error('Failed to fetch superuser ID:', superuserError?.message);
+            console.error('Failed to fetch superuser information:', superuserError?.message);
             return res.status(500).json({ error: 'Failed to retrieve manager information.' });
         }
 
         const superuser_id = superuserData.id;
+        const superuser_email = superuserData.email;
 
         // Create a new order
         const { data: orderData, error: orderError } = await supabase
@@ -465,7 +465,7 @@ router.post('/place/order', async (req, res) => {
             order_id: orderId,
             product_id: cartItem.product_id,
             title: cartItem.products.title,
-            price: cartItem.final_price, // Use the final_price from the cart table
+            price: cartItem.final_price,
             images: cartItem.products.images,
             options: cartItem.cart_item_options?.map(option => ({
                 id: option.option_id,
@@ -531,7 +531,7 @@ router.post('/place/order', async (req, res) => {
             return res.status(500).json({ error: 'Failed to clear the cart.' });
         }
 
-        // Notify user of order placement and send email
+        // Notify user and superuser of order placement
         const { data: user } = await supabase
             .from('users')
             .select('username, email')
@@ -548,11 +548,20 @@ router.post('/place/order', async (req, res) => {
                 created_at: new Date().toISOString(),
             }]);
 
+        // Send email to the user
         await sendOrderDetailsEmail(
             user.email,
             { ...orderData, delivery_address: deliveryAddress },
             detailedItems,
             user.username
+        );
+
+        // Send email to the superuser
+        await sendOrderDetailsEmail(
+            superuser_email,
+            { ...orderData, delivery_address: deliveryAddress },
+            detailedItems,
+            'Manager'
         );
 
         res.status(201).json({
@@ -565,7 +574,6 @@ router.post('/place/order', async (req, res) => {
         res.status(500).json({ error: 'Internal server error.' });
     }
 });
-
 // Update Quantity in Cart
 router.post('/update-quantity', async (req, res) => {
     const { user_id, cart_id, quantity } = req.body;
