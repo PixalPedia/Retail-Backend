@@ -353,9 +353,6 @@ router.post('/create', async (req, res) => {
             created_at: new Date().toISOString(),
         }]);
 
-        // Send email to the user
-        await sendOrderDetailsEmail(email, orderData, detailedItems, username, superuser_name);
-
         // Send email to the superuser
         await sendOrderDetailsEmail(superuser_email, orderData, detailedItems, username, superuser_name);
 
@@ -368,7 +365,6 @@ router.post('/create', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
 
 
 // Cancel Order Items
