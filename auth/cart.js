@@ -533,12 +533,6 @@ router.post('/place/order', async (req, res) => {
         }
 
         // Notify user and superuser of order placement
-        const { data: user } = await supabase
-            .from('users')
-            .select('username, email')
-            .eq('id', user_id)
-            .single();
-
         await supabase
             .from('messages')
             .insert([{
@@ -549,22 +543,13 @@ router.post('/place/order', async (req, res) => {
                 created_at: new Date().toISOString(),
             }]);
 
-        // Send email to the user
-        await sendOrderDetailsEmail(
-            user.email,
-            { ...orderData, delivery_address: deliveryAddress },
-            detailedItems,
-            user.username, // Pass the actual user name
-            superuser_name // Pass the actual superuser name
-        );
-
-        // Send email to the superuser
+        // Send email to the superuser only
         await sendOrderDetailsEmail(
             superuser_email,
             { ...orderData, delivery_address: deliveryAddress },
             detailedItems,
-            user.username, // Include the actual user name
-            superuser_name // Include the actual superuser name
+            null, // No need for the user name here
+            superuser_name // Include the superuser name
         );
 
         res.status(201).json({
