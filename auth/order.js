@@ -161,6 +161,7 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
 ///------------------ Orders Endpoints ------------------///
 
 // Create an Order
+// Create an Order
 router.post('/create', async (req, res) => {
     const { user_id, items, delivery_type } = req.body;
 
@@ -205,10 +206,10 @@ router.post('/create', async (req, res) => {
             deliveryAddress = userInfo;
         }
 
-        // Fetch superuser ID
+        // Fetch superuser ID and email
         const { data: superuserData, error: superuserError } = await supabase
             .from('superusers')
-            .select('id')
+            .select('id, email')
             .limit(1)
             .single();
 
@@ -217,6 +218,7 @@ router.post('/create', async (req, res) => {
         }
 
         const superuser_id = superuserData.id;
+        const superuser_email = superuserData.email;
 
         // Create the order
         const { data: orderData, error: orderError } = await supabase
@@ -341,7 +343,7 @@ router.post('/create', async (req, res) => {
             }
         }
 
-        // Notify user and send email with both options and types
+        // Notify user and superuser
         await supabase.from('messages').insert([{
             order_id: orderId,
             sender: superuser_id,
@@ -350,7 +352,11 @@ router.post('/create', async (req, res) => {
             created_at: new Date().toISOString(),
         }]);
 
+        // Send email to the user
         await sendOrderDetailsEmail(email, orderData, detailedItems, username);
+
+        // Send email to the superuser
+        await sendOrderDetailsEmail(superuser_email, orderData, detailedItems, 'Manager');
 
         res.status(201).json({
             message: 'Order created successfully!',
@@ -361,6 +367,7 @@ router.post('/create', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
 
 // Cancel Order Items
 router.post('/cancel', async (req, res) => {
