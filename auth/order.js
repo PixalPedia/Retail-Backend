@@ -161,7 +161,6 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
 ///------------------ Orders Endpoints ------------------///
 
 // Create an Order
-// Create an Order
 router.post('/create', async (req, res) => {
     const { user_id, items, delivery_type } = req.body;
 
@@ -235,16 +234,22 @@ router.post('/create', async (req, res) => {
             .single();
 
         if (orderError) {
+            console.error('Error creating order:', orderError.message);
             return res.status(500).json({ error: 'Failed to create the order.' });
         }
 
         const orderId = orderData.id;
 
-        // Process items and fetch their combo prices, option names, and type names
+        // Process items and fetch their details
         const detailedItems = await Promise.all(items.map(async (item) => {
             const { data: product, error: productError } = await supabase
                 .from('products')
-                .select('title, images')
+                .select(`
+                    id, title, price, images, 
+                    options:product_options (
+                        option_id
+                    )
+                `)
                 .eq('id', item.product_id)
                 .single();
 
@@ -252,55 +257,67 @@ router.post('/create', async (req, res) => {
                 throw new Error(`Product with ID ${item.product_id} not found.`);
             }
 
-            // Check if the selected combo exists
-            const { data: comboData, error: comboError } = await supabase
-                .from('types_combo')
-                .select('combo_price')
-                .eq('product_id', item.product_id)
-                .eq('options', `{${item.option_ids.join(',')}}`)
-                .single();
+            // Check if the product has associated options
+            const validOptionIds = product.options?.map(option => option.option_id) || [];
+            const hasOptions = validOptionIds.length > 0;
 
-            if (comboError || !comboData) {
-                throw new Error(`The combo selected for product ID ${item.product_id} is not available.`);
-            }
+            let finalPrice;
 
-            // Fetch option names and their type names
-            const { data: optionData, error: optionError } = await supabase
-                .from('options')
-                .select('id, option_name, type_id')
-                .in('id', item.option_ids);
-
-            if (optionError || !optionData || optionData.length === 0) {
-                throw new Error(`Failed to fetch options for product ID ${item.product_id}.`);
-            }
-
-            // Map type_name to each option
-            const optionsWithTypes = await Promise.all(optionData.map(async (option) => {
-                const { data: typeData, error: typeError } = await supabase
-                    .from('types')
-                    .select('type_name')
-                    .eq('id', option.type_id)
+            // Calculate price based on whether the product has types or not
+            if (hasOptions && Array.isArray(item.option_ids) && item.option_ids.length > 0) {
+                const { data: comboData, error: comboError } = await supabase
+                    .from('types_combo')
+                    .select('combo_price')
+                    .eq('product_id', item.product_id)
+                    .eq('options', `{${item.option_ids.join(',')}}`)
                     .single();
 
-                if (typeError || !typeData) {
-                    throw new Error(`Failed to fetch type name for type ID ${option.type_id}.`);
+                if (comboError || !comboData) {
+                    throw new Error(`The combo selected for product ID ${item.product_id} is not available.`);
                 }
 
-                return {
-                    id: option.id,
-                    option_name: option.option_name,
-                    type_id: option.type_id,
-                    type_name: typeData.type_name,
-                };
-            }));
+                finalPrice = comboData.combo_price * item.quantity;
+            } else {
+                finalPrice = product.price * item.quantity;
+            }
 
-            const finalPrice = comboData.combo_price * item.quantity;
+            // Map type_name to each option if applicable
+            const optionsWithTypes = hasOptions
+                ? await Promise.all(item.option_ids.map(async (optionId) => {
+                    const { data: optionData, error: optionError } = await supabase
+                        .from('options')
+                        .select('id, option_name, type_id')
+                        .eq('id', optionId)
+                        .single();
+
+                    if (optionError || !optionData) {
+                        throw new Error(`Failed to fetch option details for option ID ${optionId}.`);
+                    }
+
+                    const { data: typeData, error: typeError } = await supabase
+                        .from('types')
+                        .select('type_name')
+                        .eq('id', optionData.type_id)
+                        .single();
+
+                    if (typeError || !typeData) {
+                        throw new Error(`Failed to fetch type name for type ID ${optionData.type_id}.`);
+                    }
+
+                    return {
+                        id: optionData.id,
+                        option_name: optionData.option_name,
+                        type_id: optionData.type_id,
+                        type_name: typeData.type_name,
+                    };
+                }))
+                : [];
 
             return {
                 order_id: orderId,
                 product_id: item.product_id,
                 title: product.title,
-                price: comboData.combo_price,
+                price: product.price,
                 final_price: finalPrice,
                 images: product.images,
                 options: optionsWithTypes,
@@ -325,7 +342,7 @@ router.post('/create', async (req, res) => {
             return res.status(500).json({ error: 'Failed to add items to the order.' });
         }
 
-        // Insert associated options into `order_item_options`
+        // Insert associated options into `order_item_options` if applicable
         const orderItemOptions = insertedItems.flatMap(orderItem => {
             const relatedItem = detailedItems.find(item => item.product_id === orderItem.product_id);
             return relatedItem.options.map(option => ({
@@ -340,6 +357,7 @@ router.post('/create', async (req, res) => {
                 .insert(orderItemOptions);
 
             if (optionsError) {
+                console.error('Error adding options to the order items:', optionsError.message);
                 return res.status(500).json({ error: 'Failed to add options to the order.' });
             }
         }
@@ -365,6 +383,7 @@ router.post('/create', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
 
 
 // Cancel Order Items
