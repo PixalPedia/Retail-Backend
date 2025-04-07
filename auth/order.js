@@ -664,6 +664,7 @@ router.post('/user/orders', async (req, res) => {
         res.status(500).json({ error: 'Internal server error.' });
     }
 });
+
 // Fetch All Orders
 router.get('/all', async (req, res) => {
     try {
@@ -681,7 +682,7 @@ router.get('/all', async (req, res) => {
                     id,
                     product_id,
                     quantity,
-                    price, -- Fetch the actual price (final_price) from the orderitems table
+                    price,
                     products (
                         id,
                         title,
@@ -712,10 +713,10 @@ router.get('/all', async (req, res) => {
         }
 
         // Process each order to structure delivery details and item-related information
-        const processedOrders = orders.map(order => {
+        const processedOrders = orders.map((order) => {
             // Parse delivery address if it exists
             let deliveryAddress = null;
-            if (order.delivery_type === "Delivery" && order.delivery_address) {
+            if (order.delivery_type === 'Delivery' && order.delivery_address) {
                 try {
                     deliveryAddress = JSON.parse(order.delivery_address);
                 } catch (err) {
@@ -725,18 +726,18 @@ router.get('/all', async (req, res) => {
             }
 
             // Format each order's items
-            const formattedItems = order.orderitems.map(item => ({
+            const formattedItems = (order.orderitems || []).map((item) => ({
                 order_item_id: item.id, // Rename in response
                 product_id: item.product_id,
-                title: item.products.title,
-                description: item.products.description,
+                title: item.products?.title || 'N/A',
+                description: item.products?.description || 'N/A',
                 price: item.price, // Use the price from the orderitems table
-                images: item.products.images,
-                options: item.order_item_options.map(option => ({
+                images: item.products?.images || [],
+                options: (item.order_item_options || []).map((option) => ({
                     id: option.option_id,
-                    name: option.options.option_name,
-                    type_id: option.options.type_id,
-                    type_name: option.options.types.type_name,
+                    name: option.options?.option_name || 'N/A',
+                    type_id: option.options?.type_id || null,
+                    type_name: option.options?.types?.type_name || 'N/A',
                 })),
                 quantity: item.quantity,
             }));
