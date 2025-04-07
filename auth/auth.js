@@ -319,6 +319,40 @@ const login = async (req, res) => {
     }
 };
 
+// Helper function: Calculate lock remaining time
+const calculateLockRemaining = (lockedUntil) => {
+    return Math.ceil((new Date(lockedUntil).getTime() - Date.now()) / 60000); // Remaining minutes
+};
+
+// Helper function: Handle failed login attempt
+const handleFailedLogin = async (email, ip, attemptRecord) => {
+    const newFailedAttempts = attemptRecord ? attemptRecord.failed_attempts + 1 : 1;
+    const lockUntil = newFailedAttempts >= 5 ? new Date(Date.now() + 30 * 60 * 1000) : null; // Lock for 30 minutes after 5 failed attempts
+
+    if (attemptRecord) {
+        // Update failed login attempts in the database
+        await supabase
+            .from('failed_login_attempts')
+            .update({
+                failed_attempts: newFailedAttempts,
+                locked_until: lockUntil,
+            })
+            .eq('email', email)
+            .eq('ip_address', ip);
+    } else {
+        // Insert new failed login attempt record
+        await supabase
+            .from('failed_login_attempts')
+            .insert([
+                {
+                    email,
+                    ip_address: ip,
+                    failed_attempts: 1,
+                    locked_until: null,
+                },
+            ]);
+    }
+};
 
 // VerifyEmailwithotp fucntion
 const verifyEmailWithOTP = async (req, res) => {
@@ -457,7 +491,6 @@ const requestOTPForPasswordReset = async (req, res) => {
     }
 };
 
-
 // Reset Password with OTP
 const resetPasswordWithOTP = async (req, res) => {
     const { email, otp, new_password } = req.body;
@@ -534,67 +567,79 @@ const resetPasswordWithOTP = async (req, res) => {
     }
   };  
 
-// resend otp
-const otpRequests = {}; // Temporary store for tracking OTP requests by email or IP
+  // Resend OTP Function
+  const otpRequests = {}; // Temporary store for tracking OTP requests by email or IP
 
-const resendOTP = async (req, res) => {
-    const { email, purpose } = req.body;
-
-    try {
-        // Input validation
-        if (!email || !purpose) {
-            return res.status(400).json({ error: 'Email and purpose are required.' });
-        }
-
-        // Validate purpose
-        const allowedPurposes = ['password_reset', 'email_verification'];
-        if (!allowedPurposes.includes(purpose)) {
-            return res.status(400).json({ error: 'Invalid purpose specified.' });
-        }
-
-        // Normalize email for case-insensitivity
-        const sanitizedEmail = email.trim().toLowerCase();
-        const otp = generateOTP(); // Generate a new OTP
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
-        const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress; // Track IP address
-
-        console.log('Generated OTP:', otp);
-        console.log('Sanitized Email:', sanitizedEmail);
-        console.log('Request Purpose:', purpose);
-
-        // Rate-limiting: Allow max 3 OTP requests per email per hour
-        if (!otpRequests[sanitizedEmail]) {
-            otpRequests[sanitizedEmail] = { count: 0, lastRequest: Date.now() };
-        } else if (
-            otpRequests[sanitizedEmail].count >= 3 &&
-            Date.now() - otpRequests[sanitizedEmail].lastRequest < 60 * 60 * 1000
-        ) {
-            return res.status(429).json({ error: 'Too many OTP requests. Please try again later.' });
-        }
-
-        // Invalidate existing OTPs for the same purpose
-        await supabase.from('otps').delete().match({ email: sanitizedEmail, purpose });
-
-        // Send the new OTP via email
-        await sendOTPEmail(sanitizedEmail, otp, purpose);
-
-        // Insert the new OTP into the database
-        const { error } = await supabase.from('otps').insert([{ email: sanitizedEmail, otp, purpose, expires_at: expiresAt }]);
-        if (error) throw error;
-
-        console.log('Inserted new OTP into the database for:', sanitizedEmail);
-
-        // Update OTP request tracking for this email
-        otpRequests[sanitizedEmail].count++;
-        otpRequests[sanitizedEmail].lastRequest = Date.now();
-
-        // Respond with success
-        res.status(200).json({ message: `A new OTP has been sent for ${purpose}. Please check your email.` });
-    } catch (err) {
-        console.error('Resend OTP Error:', err.message);
-        res.status(500).json({ error: 'Resend OTP failed. Please try again later.', details: err.message });
-    }
-};
+  const resendOTP = async (req, res) => {
+      const { email, purpose } = req.body;
+  
+      try {
+          // Input validation
+          if (!email || !purpose) {
+              return res.status(400).json({ error: 'Email and purpose are required.' });
+          }
+  
+          // Validate purpose
+          const allowedPurposes = ['password_reset', 'email_verification'];
+          if (!allowedPurposes.includes(purpose)) {
+              return res.status(400).json({ error: 'Invalid purpose specified.' });
+          }
+  
+          // Normalize email for case-insensitivity
+          const sanitizedEmail = email.trim().toLowerCase();
+  
+          // For purpose "email_verification", check if email is already verified
+          if (purpose === 'email_verification') {
+              const verificationStatus = await isEmailVerified(sanitizedEmail); // Check email verification status
+              if (verificationStatus.verified) {
+                  return res.status(400).json({ error: 'This email is already verified.' });
+              }
+              if (verificationStatus.error) {
+                  return res.status(500).json({ error: verificationStatus.error });
+              }
+          }
+  
+          const otp = generateOTP(); // Generate a new OTP
+          const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // OTP valid for 10 minutes
+          const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress; // Track IP address
+  
+          console.log('Generated OTP:', otp);
+          console.log('Sanitized Email:', sanitizedEmail);
+          console.log('Request Purpose:', purpose);
+  
+          // Rate-limiting: Allow max 3 OTP requests per email per hour
+          if (!otpRequests[sanitizedEmail]) {
+              otpRequests[sanitizedEmail] = { count: 0, lastRequest: Date.now() };
+          } else if (
+              otpRequests[sanitizedEmail].count >= 3 &&
+              Date.now() - otpRequests[sanitizedEmail].lastRequest < 60 * 60 * 1000
+          ) {
+              return res.status(429).json({ error: 'Too many OTP requests. Please try again later.' });
+          }
+  
+          // Invalidate existing OTPs for the same purpose
+          await supabase.from('otps').delete().match({ email: sanitizedEmail, purpose });
+  
+          // Send the new OTP via email
+          await sendOTPEmail(sanitizedEmail, otp, purpose);
+  
+          // Insert the new OTP into the database
+          const { error } = await supabase.from('otps').insert([{ email: sanitizedEmail, otp, purpose, expires_at: expiresAt }]);
+          if (error) throw error;
+  
+          console.log('Inserted new OTP into the database for:', sanitizedEmail);
+  
+          // Update OTP request tracking for this email
+          otpRequests[sanitizedEmail].count++;
+          otpRequests[sanitizedEmail].lastRequest = Date.now();
+  
+          // Respond with success
+          res.status(200).json({ message: `A new OTP has been sent for ${purpose}. Please check your email.` });
+      } catch (err) {
+          console.error('Resend OTP Error:', err.message);
+          res.status(500).json({ error: 'Resend OTP failed. Please try again later.', details: err.message });
+      }
+  };  
 
 // Superuser Login Function
 const superuserLogin = async (req, res) => {
@@ -667,6 +712,7 @@ const superuserLogin = async (req, res) => {
         res.status(500).json({ error: 'Internal server error. Please try again later.' });
     }
 };
+
 
 // Export all handlers
 module.exports = {
