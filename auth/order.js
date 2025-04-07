@@ -560,6 +560,7 @@ router.put('/status', async (req, res) => {
 });
 
 // Fetch Orders for a Specific User
+// Fetch Orders for a Specific User
 router.post('/user/orders', async (req, res) => {
     const { user_id } = req.body;
 
@@ -583,7 +584,7 @@ router.post('/user/orders', async (req, res) => {
                     id,
                     product_id,
                     quantity,
-                    price, -- Fetch the actual price (final_price) from the orderitems table
+                    price,
                     products (
                         id,
                         title,
@@ -592,11 +593,17 @@ router.post('/user/orders', async (req, res) => {
                     ),
                     order_item_options (
                         option_id,
-                        options(option_name, type_id, types(type_name))
+                        options (
+                            option_name,
+                            type_id,
+                            types (
+                                type_name
+                            )
+                        )
                     )
                 )
             `)
-            .eq('user_id', user_id) // Fetch only orders for the given user_id
+            .eq('user_id', user_id)
             .order('created_at', { ascending: false });
 
         if (ordersError) {
@@ -608,11 +615,11 @@ router.post('/user/orders', async (req, res) => {
             return res.status(404).json({ error: 'No orders found for the given user.' });
         }
 
-        // Process each order to format delivery details and structure product-related information
-        const processedOrders = orders.map(order => {
+        // Process orders
+        const processedOrders = orders.map((order) => {
             // Parse delivery address if it exists
             let deliveryAddress = null;
-            if (order.delivery_type === "Delivery" && order.delivery_address) {
+            if (order.delivery_type === 'Delivery' && order.delivery_address) {
                 try {
                     deliveryAddress = JSON.parse(order.delivery_address);
                 } catch (err) {
@@ -621,15 +628,15 @@ router.post('/user/orders', async (req, res) => {
                 }
             }
 
-            // Format each order's items
-            const formattedItems = order.orderitems.map(item => ({
+            // Format order items
+            const formattedItems = order.orderitems.map((item) => ({
                 order_item_id: item.id,
                 product_id: item.product_id,
-                title: item.products.title,
-                description: item.products.description,
-                price: item.price, // Use the price from the orderitems table
-                images: item.products.images,
-                options: item.order_item_options.map(option => ({
+                title: item.products?.title || 'N/A',
+                description: item.products?.description || 'N/A',
+                price: item.price,
+                images: item.products?.images || [],
+                options: item.order_item_options.map((option) => ({
                     id: option.option_id,
                     name: option.options.option_name,
                     type_id: option.options.type_id,
@@ -639,7 +646,7 @@ router.post('/user/orders', async (req, res) => {
             }));
 
             return {
-                order_id: order.id, // Fixed to use correct field
+                order_id: order.id,
                 status: order.order_status,
                 created_at: order.created_at,
                 delivery_type: order.delivery_type,
@@ -657,7 +664,6 @@ router.post('/user/orders', async (req, res) => {
         res.status(500).json({ error: 'Internal server error.' });
     }
 });
-
 // Fetch All Orders
 router.get('/all', async (req, res) => {
     try {
