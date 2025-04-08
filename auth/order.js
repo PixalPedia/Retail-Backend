@@ -811,36 +811,152 @@ router.post('/messages/send', upload.single('image'), async (req, res) => {
     }
 });
 
-// Fetch All Messages for a Specific Order
-router.post('/messages/fetch', async (req, res) => {
-    const { order_id } = req.body;
+// Edit a Message
+router.put('/messages/edit', async (req, res) => {
+    const { messageId, sender_id, newMessage } = req.body;
 
+    // Validate input
+    if (!messageId || !sender_id || !newMessage) {
+        return res.status(400).json({ error: 'Message ID, sender ID, and new message content are required.' });
+    }
+
+    try {
+        // Update the message and set updated_at to the current time
+        const { data, error } = await supabase
+            .from('messages')
+            .update({
+                message: newMessage,
+                updated_at: new Date() // Set updated_at to current time
+            })
+            .eq('id', parseInt(messageId)) // Match the message ID
+            .eq('sender', sender_id) // Ensure the sender is authorized
+            .select(); // Return the updated message
+
+        if (error) {
+            console.error('Error editing message:', error.message);
+            return res.status(500).json({ error: 'Failed to edit the message.' });
+        }
+
+        if (data.length === 0) {
+            return res.status(404).json({ error: 'Message not found or unauthorized.' });
+        }
+
+        res.status(200).json({ message: 'Message edited successfully!', updatedMessage: data });
+    } catch (err) {
+        console.error('Unexpected error while editing message:', err.message);
+        res.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+// Update Read Status
+router.put('/messages/read', async (req, res) => {
+    const { messageId, order_id } = req.body;
+
+    // Validate input
+    if (!messageId || !order_id) {
+        return res.status(400).json({ error: 'Message ID and Order ID are required.' });
+    }
+
+    try {
+        // Update the read_status to true for the specified message
+        const { data, error } = await supabase
+            .from('messages')
+            .update({ read_status: true })
+            .eq('id', parseInt(messageId)) // Match the message ID
+            .eq('order_id', parseInt(order_id)) // Ensure the message belongs to the correct order
+            .select(); // Return the updated message
+
+        if (error) {
+            console.error('Error updating read status:', error.message);
+            return res.status(500).json({ error: 'Failed to update read status.' });
+        }
+
+        if (data.length === 0) {
+            return res.status(404).json({ error: 'Message not found or unauthorized.' });
+        }
+
+        res.status(200).json({ message: 'Read status updated successfully!', updatedMessage: data });
+    } catch (err) {
+        console.error('Unexpected error:', err.message);
+        res.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+// Delete a Message
+router.delete('/messages/delete', async (req, res) => {
+    const { messageId, sender_id } = req.body;
+
+    // Validate input
+    if (!messageId || !sender_id) {
+        return res.status(400).json({ error: 'Message ID and sender ID are required.' });
+    }
+
+    try {
+        // Delete the message from the `messages` table
+        const { data, error } = await supabase
+            .from('messages')
+            .delete()
+            .eq('id', parseInt(messageId)) // Match the message ID
+            .eq('sender', sender_id); // Ensure the sender is the one deleting
+
+        if (error) {
+            console.error('Error deleting message:', error.message);
+            return res.status(500).json({ error: 'Failed to delete the message.' });
+        }
+
+        if (data.length === 0) {
+            return res.status(404).json({ error: 'Message not found or unauthorized.' });
+        }
+
+        res.status(200).json({ message: 'Message deleted successfully!' });
+    } catch (err) {
+        console.error('Unexpected error while deleting message:', err.message);
+        res.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
+// Fetch All Messages for a Specific Order with Read Status
+router.post('/messages/fetch', async (req, res) => {
+    const { order_id, read_status } = req.body;
+
+    // Validate input
     if (!order_id) {
         return res.status(400).json({ error: 'Order ID is required.' });
     }
 
     try {
-        const { data, error } = await supabase
+        // Build the query to fetch messages
+        let query = supabase
             .from('messages')
-            .select('sender, message, image_url, read_status, created_at')
-            .eq('order_id', parseInt(order_id))
-            .order('created_at', { ascending: true });
+            .select('id, sender, message, image_url, read_status, created_at, updated_at') // Include read_status and updated_at
+            .eq('order_id', parseInt(order_id)) // Match the specific order_id
+            .order('created_at', { ascending: true }); // Sort messages chronologically
+
+        // Add filter for read_status if provided
+        if (read_status !== undefined) {
+            query = query.eq('read_status', read_status);
+        }
+
+        // Execute the query
+        const { data, error } = await query;
 
         if (error) {
-            console.error('Error fetching messages:', error.message);
+            console.error(`[ERROR] Fetching messages failed: ${error.message}`);
             return res.status(500).json({ error: 'Failed to fetch messages.' });
         }
 
+        // Handle the case where no messages exist for the given order
         if (!data || data.length === 0) {
             return res.status(404).json({ error: 'No messages found for this order.' });
         }
 
+        // Successful response with messages data
         res.status(200).json({
             message: 'Messages fetched successfully!',
-            messages: data
+            messages: data,
         });
     } catch (err) {
-        console.error('Unexpected error:', err.message);
+        console.error(`[ERROR] Unexpected server error: ${err.message}`);
         res.status(500).json({ error: 'Internal server error.' });
     }
 });
