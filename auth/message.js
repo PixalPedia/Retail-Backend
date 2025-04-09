@@ -1,25 +1,12 @@
 const express = require('express');
+const multer = require('multer');
+const sharp = require('sharp'); // For image processing
 const { supabase } = require('../supabaseClient');
 const router = express.Router();
 
-// Helper Function: Check Superuser
-const isSuperUser = async (user_id) => {
-    try {
-        const { data: superuser, error } = await supabase
-            .from('superusers')
-            .select('*')
-            .eq('id', user_id)
-            .single();
-        if (error) {
-            console.error('Superuser Check Error:', error.message);
-            return false;
-        }
-        return superuser !== null;
-    } catch (err) {
-        console.error('Unexpected Error in Superuser Check:', err.message);
-        return false;
-    }
-};
+// Multer setup for handling file uploads
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 
 // Helper Function: Sanitize File Name
 const sanitizeFileName = (fileName) => {
@@ -36,13 +23,13 @@ const uploadImageToSupabase = async (buffer, fileName) => {
             .toBuffer();
 
         console.log('Sanitizing file name...');
-        const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_'); // Remove invalid characters
-        const timestamp = Date.now(); // Ensure unique file path
+        const sanitizedFileName = sanitizeFileName(fileName);
+        const timestamp = Date.now();
         const filePath = `messages/${timestamp}-${sanitizedFileName}`;
 
         console.log('Uploading image to Supabase...');
         const { data, error } = await supabase.storage
-            .from('images') // Make sure the 'images' bucket exists
+            .from('images') // Ensure the 'images' bucket exists
             .upload(filePath, compressedImage, {
                 cacheControl: '3600', // Cache for 1 hour
                 upsert: false, // Prevent overwriting existing files
@@ -63,6 +50,7 @@ const uploadImageToSupabase = async (buffer, fileName) => {
     }
 };
 
+// Helper Function: Delete Message and Associated Image
 const deleteMessage = async (messageId) => {
     try {
         // Step 1: Fetch the message details
@@ -71,7 +59,6 @@ const deleteMessage = async (messageId) => {
             .select('*')
             .eq('id', messageId)
             .single();
-
         if (fetchError || !messageData) {
             console.error('Error Fetching Message:', fetchError?.message);
             throw new Error('Message not found.');
@@ -108,9 +95,7 @@ const deleteMessage = async (messageId) => {
     }
 };
 
-// ---------------------------------------------------------------------------
 // Add New Message (General or Linked to an Order)
-// ---------------------------------------------------------------------------
 router.post('/send', upload.single('image'), async (req, res) => {
     const { orderId, sender_id, message } = req.body;
     const imageFile = req.file;
@@ -137,13 +122,15 @@ router.post('/send', upload.single('image'), async (req, res) => {
         // Insert message into the messages table
         const messageInsert = await supabase
             .from('messages')
-            .insert([{
-                sender: sender_id,
-                message: message || null,
-                image_url: imageUrl || null,
-                read_status: false, // Message starts as unread
-                is_edited: false, // No edits yet
-            }])
+            .insert([
+                {
+                    sender: sender_id,
+                    message: message?.trim() || null,
+                    image_url: imageUrl || null,
+                    read_status: false,
+                    is_edited: false,
+                },
+            ])
             .select();
 
         if (messageInsert.error) {
@@ -151,16 +138,18 @@ router.post('/send', upload.single('image'), async (req, res) => {
             return res.status(500).json({ error: 'Failed to save the message.' });
         }
 
-        const messageData = messageInsert.data[0]; // Extract newly created message
+        const messageData = messageInsert.data[0];
 
         // If orderId is provided, link the message to the order
         if (orderId) {
             const orderMessageInsert = await supabase
                 .from('order_messages')
-                .insert([{
-                    order_id: parseInt(orderId),
-                    message_id: messageData.id, // ID of the new message
-                }]);
+                .insert([
+                    {
+                        order_id: parseInt(orderId),
+                        message_id: messageData.id,
+                    },
+                ]);
 
             if (orderMessageInsert.error) {
                 console.error('Order Link Error:', orderMessageInsert.error.message);
@@ -168,20 +157,14 @@ router.post('/send', upload.single('image'), async (req, res) => {
             }
         }
 
-        // Return successful response
-        res.status(201).json({
-            message: 'Message sent successfully!',
-            messageData,
-        });
+        res.status(201).json({ message: 'Message sent successfully!', messageData });
     } catch (err) {
         console.error('Unexpected Error:', err.message);
         res.status(500).json({ error: 'Internal server error.' });
     }
 });
 
-// ---------------------------------------------------------------------------
 // Fetch All Messages (General or Order-Specific)
-// ---------------------------------------------------------------------------
 router.post('/list', async (req, res) => {
     const { orderId, sender_id, superuser_id } = req.body;
 
@@ -202,24 +185,21 @@ router.post('/list', async (req, res) => {
                 return res.status(403).json({ error: 'Superuser validation failed.' });
             }
 
-            isSuperUser = !!superuserData; // Superuser is valid if data exists
+            isSuperUser = !!superuserData;
         }
 
         if (orderId) {
-            // Fetch messages linked to an order
             query = supabase
                 .from('messages')
                 .select('*')
                 .eq('order_id', parseInt(orderId))
                 .order('created_at', { ascending: true });
         } else if (isSuperUser) {
-            // Fetch all general messages (for superuser)
             query = supabase
                 .from('messages')
                 .select('*')
                 .order('created_at', { ascending: true });
         } else {
-            // Fetch all messages for the specific user (sender_id)
             query = supabase
                 .from('messages')
                 .select('*')
@@ -240,7 +220,6 @@ router.post('/list', async (req, res) => {
         res.status(500).json({ error: 'Internal server error.' });
     }
 });
-
 // ---------------------------------------------------------------------------
 // Edit an Existing Message
 // ---------------------------------------------------------------------------
