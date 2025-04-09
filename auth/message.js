@@ -31,22 +31,22 @@ const uploadImageToSupabase = async (buffer, fileName) => {
     try {
         console.log('Compressing image...');
         const compressedImage = await sharp(buffer)
-            .resize(1024, 1024, { fit: 'inside' })
-            .jpeg({ quality: 80 })
+            .resize(1024, 1024, { fit: 'inside' }) // Resize within 1024x1024
+            .jpeg({ quality: 80 }) // Compress with 80% quality
             .toBuffer();
 
         console.log('Sanitizing file name...');
-        const sanitizedFileName = sanitizeFileName(fileName);
-        const timestamp = Date.now();
+        const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_'); // Remove invalid characters
+        const timestamp = Date.now(); // Ensure unique file path
         const filePath = `messages/${timestamp}-${sanitizedFileName}`;
 
         console.log('Uploading image to Supabase...');
         const { data, error } = await supabase.storage
-            .from('images') // Ensure the bucket name is correct
+            .from('images') // Make sure the 'images' bucket exists
             .upload(filePath, compressedImage, {
-                cacheControl: '3600',
-                upsert: false,
-                contentType: 'image/jpeg',
+                cacheControl: '3600', // Cache for 1 hour
+                upsert: false, // Prevent overwriting existing files
+                contentType: 'image/jpeg', // Explicitly set image MIME type
             });
 
         if (error) {
@@ -56,8 +56,6 @@ const uploadImageToSupabase = async (buffer, fileName) => {
 
         console.log('Constructing public URL...');
         const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/images/${filePath}`;
-
-        console.log(`Image successfully uploaded: ${publicUrl}`);
         return publicUrl;
     } catch (err) {
         console.error('Error during image upload:', err.message);
