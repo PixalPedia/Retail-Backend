@@ -1,7 +1,6 @@
 const express = require('express');
 const { supabase } = require('../supabaseClient');
 const router = express.Router();
-const upload = require('../middleware/upload'); // Assume you're using a middleware for file uploads
 
 // Helper Function: Check Superuser
 const isSuperUser = async (user_id) => {
