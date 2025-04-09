@@ -368,6 +368,7 @@ router.post('/create', async (req, res) => {
             sender: superuser_id,
             message: `Your order has been placed successfully! Order ID: ${orderId}. Thank you for shopping with us.`,
             read_status: false,
+            is_edited: false,
             created_at: new Date().toISOString(),
         }]);
 
