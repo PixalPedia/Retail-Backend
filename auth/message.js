@@ -678,6 +678,38 @@ router.patch('/edit', upload.single('image'), async (req, res) => {
     }
 });
 
+// Update Read Status
+router.put('/read', async (req, res) => {
+    const { messageId } = req.body;
+
+    // Validate input
+    if (!messageId) {
+        return res.status(400).json({ error: 'Message ID is required.' });
+    }
+
+    try {
+        // Update the read_status to true for the specified message
+        const { data, error } = await supabase
+            .from('messages')
+            .update({ read_status: true }) // Set read_status to true
+            .eq('id', parseInt(messageId)) // Match the message ID
+            .select(); // Return the updated message
+
+        if (error) {
+            console.error('Error updating read status:', error.message);
+            return res.status(500).json({ error: 'Failed to update read status.' });
+        }
+
+        if (data.length === 0) {
+            return res.status(404).json({ error: 'Message not found or unauthorized.' });
+        }
+
+        res.status(200).json({ message: 'Read status updated successfully!', updatedMessage: data });
+    } catch (err) {
+        console.error('Unexpected error:', err.message);
+        res.status(500).json({ error: 'Internal server error.' });
+    }
+});
 
 // Delete a Message
 router.delete('/delete', async (req, res) => {
