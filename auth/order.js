@@ -160,7 +160,7 @@ const sendOrderDetailsEmail = async (email, order, items, userName, superuserNam
 
 ///------------------ Orders Endpoints ------------------///
 
-// Create an Order
+// Create Order
 router.post('/create', async (req, res) => {
     const { user_id, items, delivery_type } = req.body;
 
@@ -362,17 +362,38 @@ router.post('/create', async (req, res) => {
             }
         }
 
-        // Notify user and superuser
-        await supabase.from('messages').insert([{
-            order_id: orderId,
-            sender: superuser_id,
-            message: `Your order has been placed successfully! Order ID: ${orderId}. Thank you for shopping with us.`,
-            read_status: false,
-            is_edited: false,
-            created_at: new Date().toISOString(),
-        }]);
+        // Notify user and superuser by creating a notification message
+        const { data: messageData, error: messageError } = await supabase
+            .from('messages')
+            .insert([{
+                sender: superuser_id,
+                message: `Your order has been placed successfully! Order ID: ${orderId}. Thank you for shopping with us.`,
+                read_status: false,
+                created_at: new Date().toISOString(),
+            }])
+            .select()
+            .single();
 
-        // Send email to the superuser
+        if (messageError) {
+            console.error('Error creating message:', messageError.message);
+            return res.status(500).json({ error: 'Failed to send notification message.' });
+        }
+
+        // Link the notification message to the order
+        const { error: linkError } = await supabase
+            .from('order_messages')
+            .insert([{
+                order_id: orderId,
+                message_id: messageData.id,
+                linked_at: new Date().toISOString(),
+            }]);
+
+        if (linkError) {
+            console.error('Error linking message to order:', linkError.message);
+            return res.status(500).json({ error: 'Failed to link message to the order.' });
+        }
+
+        // Send email to the superuser with order details
         await sendOrderDetailsEmail(superuser_email, orderData, detailedItems, username, superuser_name);
 
         res.status(201).json({
@@ -384,7 +405,6 @@ router.post('/create', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
 
 
 // Cancel Order Items
