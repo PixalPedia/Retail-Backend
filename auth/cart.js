@@ -444,8 +444,8 @@ router.post('/place/order', async (req, res) => {
 
         // Fetch user's name
         const { data: userData, error: userError } = await supabase
-            .from('users') // Assuming the table storing user information is called 'users'
-            .select('username') // Adjust column name if different
+            .from('users')
+            .select('username')
             .eq('id', user_id)
             .single();
 
@@ -454,7 +454,7 @@ router.post('/place/order', async (req, res) => {
             return res.status(400).json({ error: 'Failed to retrieve user details for the order.' });
         }
 
-        const userName = userData.username || 'Unknown User'; // Default fallback
+        const userName = userData.username || 'Unknown User';
 
         // Handle delivery type and address
         let deliveryAddress = null;
@@ -486,7 +486,7 @@ router.post('/place/order', async (req, res) => {
 
         const superuser_id = superuserData.id;
         const superuser_email = superuserData.email;
-        const superuser_name = superuserData.username || 'Manager'; // Default fallback to Manager
+        const superuser_name = superuserData.username || 'Manager';
 
         // Create a new order
         const { data: orderData, error: orderError } = await supabase
@@ -579,25 +579,45 @@ router.post('/place/order', async (req, res) => {
             return res.status(500).json({ error: 'Failed to clear the cart.' });
         }
 
-        // Notify user and superuser of order placement
-        await supabase
+        // Create a notification message in the `messages` table (without order_id)
+        const { data: messageData, error: messageError } = await supabase
             .from('messages')
             .insert([{
-                order_id: orderId,
                 sender: superuser_id,
                 message: `Your order has been placed successfully! Order ID: ${orderId}. Thank you for shopping with us.`,
                 read_status: false,
                 is_edited: false,
                 created_at: new Date().toISOString(),
+            }])
+            .select()
+            .single();
+
+        if (messageError) {
+            console.error('Error creating message:', messageError.message);
+            return res.status(500).json({ error: 'Failed to send notification message.' });
+        }
+
+        // Link the created message to the order using the `order_messages` table
+        const { error: linkError } = await supabase
+            .from('order_messages')
+            .insert([{
+                order_id: orderId,
+                message_id: messageData.id,
+                linked_at: new Date().toISOString(),
             }]);
 
-        // Send email with user name included
+        if (linkError) {
+            console.error('Error linking message to order:', linkError.message);
+            return res.status(500).json({ error: 'Failed to link message to the order.' });
+        }
+
+        // Send email with order details
         await sendOrderDetailsEmail(
             superuser_email,
             { ...orderData, delivery_address: deliveryAddress },
             detailedItems,
-            userName, // Pass the fetched user name here
-            superuser_name // Include the superuser name
+            userName,
+            superuser_name
         );
 
         res.status(201).json({
