@@ -133,6 +133,62 @@ router.post('/products', async (req, res) => {
     }
 });
 
+// Edit Category
+router.put('/edit', async (req, res) => {
+    const { id, name, user_id } = req.body;
+  
+    try {
+      // Validate Input
+      if (!user_id) {
+        return res.status(400).json({ error: 'User ID is required.' });
+      }
+      if (!id) {
+        return res.status(400).json({ error: 'Category ID is required.' });
+      }
+      const trimmedName = name?.trim();
+      if (!trimmedName) {
+        return res.status(400).json({ error: 'Category name is required.' });
+      }
+  
+      // Check if the user is a superuser
+      const isSuper = await isSuperUser(user_id);
+      if (!isSuper) {
+        return res.status(403).json({ error: 'Only superusers can edit categories.' });
+      }
+  
+      // Check if the category exists
+      const { data: existingCategory, error: fetchError } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('id', id)
+        .single();
+  
+      if (fetchError || !existingCategory) {
+        return res.status(404).json({ error: 'Category not found.' });
+      }
+  
+      // Update the category name
+      const { data, error: updateError } = await supabase
+        .from('categories')
+        .update({ name: trimmedName })
+        .eq('id', id)
+        .select();
+  
+      if (updateError) {
+        console.error('Category Update Error:', updateError.message);
+        return res.status(500).json({ error: `Failed to update category. Supabase error: ${updateError.message}` });
+      }
+  
+      res.status(200).json({
+        message: `Category with ID ${id} successfully updated to "${trimmedName}".`,
+        category: data[0],
+      });
+    } catch (err) {
+      console.error('Error in Edit Category:', err.message);
+      res.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
 // Delete Category
 router.delete('/delete', async (req, res) => {
     const { id, user_id } = req.body;
