@@ -47,6 +47,7 @@ const cartRoutes = require('./auth/cart'); // Cart routes
 const posterRoutes = require('./auth/poster'); // Poster routes
 const typeComboRoutes = require('./auth/typecombo'); // Type combo routes
 const messageRoutes = require('./auth/message'); // Message routes
+const ReportRoutes = require('./auth/Report'); // Report routes
 
 // Authentication Routes
 app.post('/signup', signup); // User signup
@@ -68,6 +69,7 @@ app.use('/api/cart', cartRoutes); // Endpoints for cart-related operations
 app.use('/api/posters', posterRoutes); // Endpoints for poster-related operations
 app.use('/api/type-combo', typeComboRoutes); // Endpoints for type combo-related operations
 app.use('/api/messages', messageRoutes); // Endpoints for message-related operations
+app.use('/api/report', ReportRoutes); // Endpoints for report-related operations
 
 // Start the server
 const PORT = process.env.PORT || 3001;
