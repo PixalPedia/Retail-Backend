@@ -399,237 +399,269 @@ router.delete('/delete', async (req, res) => {
 // Place Order from Cart
 router.post('/place/order', async (req, res) => {
     const { user_id, delivery_type } = req.body;
-
+  
     // Validate input
     if (!user_id) {
-        return res.status(400).json({ error: 'User ID is required to place an order.' });
+      return res.status(400).json({ error: 'User ID is required to place an order.' });
     }
-
+  
     if (!delivery_type || !['Pickup', 'Delivery'].includes(delivery_type)) {
-        return res.status(400).json({ error: 'Delivery type must be either "Pickup" or "Delivery".' });
+      return res.status(400).json({ error: 'Delivery type must be either "Pickup" or "Delivery".' });
     }
-
+  
     try {
-        // Fetch cart items with associated options and final price
-        const { data: cartItems, error: cartError } = await supabase
-            .from('cart')
-            .select(`
-                id,
-                product_id,
-                quantity,
-                final_price, 
-                cart_item_options (
-                    option_id,
-                    options (
-                        option_name,
-                        type_id,
-                        types (
-                            type_name
-                        )
-                    )
-                ),
-                products (
-                    id,
-                    title,
-                    images
-                )
-            `)
-            .eq('user_id', user_id);
-
-        if (cartError || !cartItems || cartItems.length === 0) {
-            return res.status(400).json({ error: 'No items in the cart to place an order.' });
+      // Fetch cart items with associated options and final price
+      const { data: cartItems, error: cartError } = await supabase
+        .from('cart')
+        .select(`
+          id,
+          product_id,
+          quantity,
+          final_price, 
+          cart_item_options (
+            option_id,
+            options (
+              option_name,
+              type_id,
+              types (
+                type_name
+              )
+            )
+          ),
+          products (
+            id,
+            title,
+            images
+          )
+        `)
+        .eq('user_id', user_id);
+  
+      if (cartError || !cartItems || cartItems.length === 0) {
+        return res.status(400).json({ error: 'No items in the cart to place an order.' });
+      }
+  
+      console.log('Cart Items:', cartItems);
+  
+      // Fetch user's name
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('username')
+        .eq('id', user_id)
+        .single();
+  
+      if (userError || !userData) {
+        console.error('Error fetching user details:', userError?.message || 'User not found.');
+        return res.status(400).json({ error: 'Failed to retrieve user details for the order.' });
+      }
+      const userName = userData.username || 'Unknown User';
+  
+      // Handle delivery type and address
+      let deliveryAddress = null;
+      if (delivery_type === 'Delivery') {
+        const { data: userInfo, error: userInfoError } = await supabase
+          .from('info')
+          .select('phone_number, address_line_1, address_line_2, city, state, country, postal_code')
+          .eq('user_id', user_id)
+          .single();
+  
+        if (userInfoError || !userInfo) {
+          console.error('No address found for this user:', userInfoError?.message);
+          return res.status(400).json({ error: 'No saved address found. Please save an address first.' });
         }
-
-        console.log('Cart Items:', cartItems);
-
-        // Fetch user's name
-        const { data: userData, error: userError } = await supabase
-            .from('users')
-            .select('username')
-            .eq('id', user_id)
-            .single();
-
-        if (userError || !userData) {
-            console.error('Error fetching user details:', userError?.message || 'User not found.');
-            return res.status(400).json({ error: 'Failed to retrieve user details for the order.' });
+        deliveryAddress = userInfo;
+      }
+  
+      // Fetch superuser information (ID, username, and email)
+      const { data: superuserData, error: superuserError } = await supabase
+        .from('superusers')
+        .select('id, username, email')
+        .limit(1)
+        .single();
+  
+      if (superuserError || !superuserData) {
+        console.error('Failed to fetch superuser information:', superuserError?.message);
+        return res.status(500).json({ error: 'Failed to retrieve manager information.' });
+      }
+      const superuser_id = superuserData.id;
+      const superuser_email = superuserData.email;
+      const superuser_name = superuserData.username || 'Manager';
+  
+      // Create a new order
+      const { data: orderData, error: orderError } = await supabase
+        .from('orders')
+        .insert([
+          {
+            user_id,
+            order_status: 'Pending',
+            created_at: new Date().toISOString(),
+            delivery_type,
+            delivery_address: deliveryAddress ? JSON.stringify(deliveryAddress) : null,
+          },
+        ])
+        .select()
+        .single();
+  
+      if (orderError) {
+        console.error('Error creating order:', orderError.message);
+        return res.status(500).json({ error: 'Failed to create the order.' });
+      }
+      const orderId = orderData.id;
+  
+      // Map and insert order items into `orderitems`
+      const detailedItems = cartItems.map(cartItem => ({
+        order_id: orderId,
+        product_id: cartItem.product_id,
+        title: cartItem.products.title,
+        price: cartItem.final_price,
+        images: cartItem.products.images,
+        options: cartItem.cart_item_options?.map(option => ({
+          id: option.option_id,
+          name: option.options.option_name,
+          type_id: option.options.type_id,
+          type_name: option.options.types.type_name,
+        })) || [],
+        quantity: cartItem.quantity,
+      }));
+  
+      const orderItems = detailedItems.map(item => ({
+        order_id: item.order_id,
+        product_id: item.product_id,
+        price: item.price,
+        quantity: item.quantity,
+      }));
+  
+      const { data: insertedOrderItems, error: orderItemsError } = await supabase
+        .from('orderitems')
+        .insert(orderItems)
+        .select();
+  
+      if (orderItemsError) {
+        console.error('Error adding items to the order:', orderItemsError.message);
+        return res.status(500).json({ error: 'Failed to add items to the order.' });
+      }
+  
+      // Map and insert associated options into `order_item_options`
+      const orderItemOptions = [];
+      insertedOrderItems.forEach(orderItem => {
+        const cartItem = cartItems.find(item => item.product_id === orderItem.product_id);
+        if (cartItem && cartItem.cart_item_options) {
+          cartItem.cart_item_options.forEach(option => {
+            orderItemOptions.push({
+              order_item_id: orderItem.id,
+              option_id: option.option_id,
+            });
+          });
         }
-
-        const userName = userData.username || 'Unknown User';
-
-        // Handle delivery type and address
-        let deliveryAddress = null;
-        if (delivery_type === 'Delivery') {
-            const { data: userInfo, error: userInfoError } = await supabase
-                .from('info')
-                .select('phone_number, address_line_1, address_line_2, city, state, country, postal_code')
-                .eq('user_id', user_id)
-                .single();
-
-            if (userInfoError || !userInfo) {
-                console.error('No address found for this user:', userInfoError?.message);
-                return res.status(400).json({ error: 'No saved address found. Please save an address first.' });
-            }
-            deliveryAddress = userInfo;
+      });
+  
+      if (orderItemOptions.length > 0) {
+        const { error: orderOptionsError } = await supabase
+          .from('order_item_options')
+          .insert(orderItemOptions);
+  
+        if (orderOptionsError) {
+          console.error('Error adding options to the order items:', orderOptionsError.message);
+          return res.status(500).json({ error: 'Failed to add options to the order.' });
         }
-
-        // Fetch superuser information (ID, username, and email)
-        const { data: superuserData, error: superuserError } = await supabase
-            .from('superusers')
-            .select('id, username, email')
-            .limit(1)
-            .single();
-
-        if (superuserError || !superuserData) {
-            console.error('Failed to fetch superuser information:', superuserError?.message);
-            return res.status(500).json({ error: 'Failed to retrieve manager information.' });
+      }
+  
+      console.log('Order Items with Options:', orderItemOptions);
+  
+      // ** New Block: Update Stock Quantities **
+      // For each ordered item, fetch the current stock, subtract the ordered quantity,
+      // and update the product's stock.
+      const updateStockPromises = detailedItems.map(async (item) => {
+        // Fetch current stock quantity for this product
+        const { data: productData, error: stockError } = await supabase
+          .from('products')
+          .select('stock_quantity')
+          .eq('id', item.product_id)
+          .single();
+        if (stockError || !productData) {
+          throw new Error(`Failed to fetch stock quantity for product ID ${item.product_id}.`);
         }
-
-        const superuser_id = superuserData.id;
-        const superuser_email = superuserData.email;
-        const superuser_name = superuserData.username || 'Manager';
-
-        // Create a new order
-        const { data: orderData, error: orderError } = await supabase
-            .from('orders')
-            .insert([{
-                user_id,
-                order_status: 'Pending',
-                created_at: new Date().toISOString(),
-                delivery_type,
-                delivery_address: deliveryAddress ? JSON.stringify(deliveryAddress) : null,
-            }])
-            .select()
-            .single();
-
-        if (orderError) {
-            console.error('Error creating order:', orderError.message);
-            return res.status(500).json({ error: 'Failed to create the order.' });
+        const newStock = productData.stock_quantity - item.quantity;
+        if (newStock < 0) {
+          throw new Error(`Insufficient stock for product ID ${item.product_id}.`);
         }
-
-        const orderId = orderData.id;
-
-        // Map and insert order items into `orderitems`
-        const detailedItems = cartItems.map(cartItem => ({
+        // Update the product's stock quantity
+        const { error: updateError } = await supabase
+          .from('products')
+          .update({ stock_quantity: newStock })
+          .eq('id', item.product_id);
+        if (updateError) {
+          throw new Error(`Failed to update stock for product ID ${item.product_id}.`);
+        }
+      });
+      await Promise.all(updateStockPromises);
+      // End of stock update block
+  
+      // Clear the user's cart after order placement
+      const { error: clearCartError } = await supabase
+        .from('cart')
+        .delete()
+        .eq('user_id', user_id);
+  
+      if (clearCartError) {
+        console.error('Error clearing cart:', clearCartError.message);
+        return res.status(500).json({ error: 'Failed to clear the cart.' });
+      }
+  
+      // Create a notification message in the `messages` table (without order_id)
+      const { data: messageData, error: messageError } = await supabase
+        .from('messages')
+        .insert([
+          {
+            sender: superuser_id,
+            message: `Your order has been placed successfully! Order ID: ${orderId}. Thank you for shopping with us.`,
+            read_status: false,
+            is_edited: false,
+            created_at: new Date().toISOString(),
+          },
+        ])
+        .select()
+        .single();
+  
+      if (messageError) {
+        console.error('Error creating message:', messageError.message);
+        return res.status(500).json({ error: 'Failed to send notification message.' });
+      }
+  
+      // Link the created message to the order using the `order_messages` table
+      const { error: linkError } = await supabase
+        .from('order_messages')
+        .insert([
+          {
             order_id: orderId,
-            product_id: cartItem.product_id,
-            title: cartItem.products.title,
-            price: cartItem.final_price,
-            images: cartItem.products.images,
-            options: cartItem.cart_item_options?.map(option => ({
-                id: option.option_id,
-                name: option.options.option_name,
-                type_id: option.options.type_id,
-                type_name: option.options.types.type_name,
-            })) || [],
-            quantity: cartItem.quantity,
-        }));
-
-        const orderItems = detailedItems.map(item => ({
-            order_id: item.order_id,
-            product_id: item.product_id,
-            price: item.price,
-            quantity: item.quantity,
-        }));
-
-        const { data: insertedOrderItems, error: orderItemsError } = await supabase
-            .from('orderitems')
-            .insert(orderItems)
-            .select();
-
-        if (orderItemsError) {
-            console.error('Error adding items to the order:', orderItemsError.message);
-            return res.status(500).json({ error: 'Failed to add items to the order.' });
-        }
-
-        // Map and insert associated options into `order_item_options`
-        const orderItemOptions = [];
-        insertedOrderItems.forEach(orderItem => {
-            const cartItem = cartItems.find(item => item.product_id === orderItem.product_id);
-            if (cartItem && cartItem.cart_item_options) {
-                cartItem.cart_item_options.forEach(option => {
-                    orderItemOptions.push({
-                        order_item_id: orderItem.id,
-                        option_id: option.option_id,
-                    });
-                });
-            }
-        });
-
-        if (orderItemOptions.length > 0) {
-            const { error: orderOptionsError } = await supabase
-                .from('order_item_options')
-                .insert(orderItemOptions);
-
-            if (orderOptionsError) {
-                console.error('Error adding options to the order items:', orderOptionsError.message);
-                return res.status(500).json({ error: 'Failed to add options to the order.' });
-            }
-        }
-
-        console.log('Order Items with Options:', orderItemOptions);
-
-        // Clear the user's cart after order placement
-        const { error: clearCartError } = await supabase
-            .from('cart')
-            .delete()
-            .eq('user_id', user_id);
-
-        if (clearCartError) {
-            console.error('Error clearing cart:', clearCartError.message);
-            return res.status(500).json({ error: 'Failed to clear the cart.' });
-        }
-
-        // Create a notification message in the `messages` table (without order_id)
-        const { data: messageData, error: messageError } = await supabase
-            .from('messages')
-            .insert([{
-                sender: superuser_id,
-                message: `Your order has been placed successfully! Order ID: ${orderId}. Thank you for shopping with us.`,
-                read_status: false,
-                is_edited: false,
-                created_at: new Date().toISOString(),
-            }])
-            .select()
-            .single();
-
-        if (messageError) {
-            console.error('Error creating message:', messageError.message);
-            return res.status(500).json({ error: 'Failed to send notification message.' });
-        }
-
-        // Link the created message to the order using the `order_messages` table
-        const { error: linkError } = await supabase
-            .from('order_messages')
-            .insert([{
-                order_id: orderId,
-                message_id: messageData.id,
-                linked_at: new Date().toISOString(),
-            }]);
-
-        if (linkError) {
-            console.error('Error linking message to order:', linkError.message);
-            return res.status(500).json({ error: 'Failed to link message to the order.' });
-        }
-
-        // Send email with order details
-        await sendOrderDetailsEmail(
-            superuser_email,
-            { ...orderData, delivery_address: deliveryAddress },
-            detailedItems,
-            userName,
-            superuser_name
-        );
-
-        res.status(201).json({
-            message: 'Order placed successfully!',
-            order: orderData,
-            order_items: detailedItems,
-        });
+            message_id: messageData.id,
+            linked_at: new Date().toISOString(),
+          },
+        ]);
+  
+      if (linkError) {
+        console.error('Error linking message to order:', linkError.message);
+        return res.status(500).json({ error: 'Failed to link message to the order.' });
+      }
+  
+      // Send email with order details
+      await sendOrderDetailsEmail(
+        superuser_email,
+        { ...orderData, delivery_address: deliveryAddress },
+        detailedItems,
+        userName,
+        superuser_name
+      );
+  
+      res.status(201).json({
+        message: 'Order placed successfully!',
+        order: orderData,
+        order_items: detailedItems,
+      });
     } catch (err) {
-        console.error('Unexpected error:', err.message);
-        res.status(500).json({ error: 'Internal server error.' });
+      console.error('Unexpected error:', err.message);
+      res.status(500).json({ error: 'Internal server error.' });
     }
-});
+  });
 
 // Update Quantity in Cart
 router.post('/update-quantity', async (req, res) => {
