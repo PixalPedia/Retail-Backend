@@ -190,235 +190,295 @@ router.post('/conversation/create', async (req, res) => {
     }
 });
 
+// Update Read Status
+router.put('/read', async (req, res) => {
+    const { messageId } = req.body;
+
+    // Validate input
+    if (!messageId) {
+        return res.status(400).json({ error: 'Message ID is required.' });
+    }
+
+    try {
+        // Update the read_status to true for the specified message
+        const { data, error } = await supabase
+            .from('messages')
+            .update({ read_status: true }) // Set read_status to true
+            .eq('id', parseInt(messageId)) // Match the message ID
+            .select(); // Return the updated message
+
+        if (error) {
+            console.error('Error updating read status:', error.message);
+            return res.status(500).json({ error: 'Failed to update read status.' });
+        }
+
+        if (data.length === 0) {
+            return res.status(404).json({ error: 'Message not found or unauthorized.' });
+        }
+
+        res.status(200).json({ message: 'Read status updated successfully!', updatedMessage: data });
+    } catch (err) {
+        console.error('Unexpected error:', err.message);
+        res.status(500).json({ error: 'Internal server error.' });
+    }
+});
+
 // Send Message by User
 router.post('/send', upload.single('image'), async (req, res) => {
     const { orderId, conversation_id, sender_id, message } = req.body; // Extract fields from form-data
     const imageFile = req.file; // Handle the uploaded image file
-
+  
     // Validate required inputs
     if (!sender_id || (!message && !imageFile)) {
-        return res.status(400).json({ error: 'Sender ID and either a message or an image are required.' });
+      return res.status(400).json({ error: 'Sender ID and either a message or an image are required.' });
     }
-
+  
     if (!orderId && !conversation_id) {
-        return res.status(400).json({ error: 'Either order ID or conversation ID is required.' });
+      return res.status(400).json({ error: 'Either order ID or conversation ID is required.' });
     }
-
+  
     try {
-        let imageUrl = null;
-
-        // Step 1: Handle image upload if provided
-        if (imageFile) {
-            try {
-                console.log('Uploading image...');
-                imageUrl = await uploadImageToSupabase(
-                    imageFile.buffer, // Access the image buffer from the file
-                    `message_${Date.now()}_${imageFile.originalname}` // Create a unique filename
-                );
-            } catch (err) {
-                console.error('Image Upload Error:', err.message);
-                return res.status(500).json({ error: 'Failed to upload image.' });
-            }
+      let imageUrl = null;
+  
+      // Step 1: Handle image upload if provided
+      if (imageFile) {
+        try {
+          console.log('Uploading image...');
+          imageUrl = await uploadImageToSupabase(
+            imageFile.buffer, // Access the image buffer from the file
+            `message_${Date.now()}_${imageFile.originalname}` // Create a unique filename
+          );
+        } catch (err) {
+          console.error('Image Upload Error:', err.message);
+          return res.status(500).json({ error: 'Failed to upload image.' });
         }
-
-        // Step 2: Insert the message into the `messages` table
-        const messageInsert = await supabase
-            .from('messages')
-            .insert([
-                {
-                    sender: sender_id,
-                    message: message?.trim() || null, // Store the message text if provided
-                    image_url: imageUrl || null, // Store the uploaded image URL
-                    read_status: false, // Default read status
-                    is_edited: false, // Message is not edited initially
-                    created_at: new Date(), // Timestamp for message creation
-                },
-            ])
-            .select();
-
-        if (messageInsert.error) {
-            console.error('Message Insert Error:', messageInsert.error.message);
-            return res.status(500).json({ error: 'Failed to save the message.' });
+      }
+  
+      // Step 2: Insert the message into the `messages` table
+      const messageInsert = await supabase
+        .from('messages')
+        .insert([
+          {
+            sender: sender_id,
+            message: message?.trim() || null, // Store the message text if provided
+            image_url: imageUrl || null, // Store the uploaded image URL
+            read_status: false, // Default read status
+            is_edited: false, // Message is not edited initially
+            created_at: new Date(), // Timestamp for message creation
+          },
+        ])
+        .select();
+  
+      if (messageInsert.error) {
+        console.error('Message Insert Error:', messageInsert.error.message);
+        return res.status(500).json({ error: 'Failed to save the message.' });
+      }
+  
+      const messageData = messageInsert.data[0];
+  
+      // Step 3: Link the message to either an order or a conversation
+      if (orderId) {
+        const orderMessageInsert = await supabase
+          .from('order_messages')
+          .insert([
+            {
+              order_id: parseInt(orderId, 10), // Ensure `orderId` is an integer
+              message_id: messageData.id, // Link the message ID to the order
+              linked_at: new Date(), // Timestamp for linking
+            },
+          ]);
+  
+        if (orderMessageInsert.error) {
+          console.error('Order Link Error:', orderMessageInsert.error.message);
+          return res.status(500).json({ error: 'Failed to link the message to the order.' });
         }
-
-        const messageData = messageInsert.data[0];
-
-        // Step 3: Link the message to either an order or a conversation
+      }
+  
+      if (conversation_id) {
+        const conversationMessageInsert = await supabase
+          .from('conversation_messages')
+          .insert([
+            {
+              conversation_id: parseInt(conversation_id, 10), // Ensure `conversation_id` is an integer
+              message_id: messageData.id, // Link the message ID to the conversation
+              added_at: new Date(), // Timestamp for linking
+            },
+          ]);
+  
+        if (conversationMessageInsert.error) {
+          console.error('Conversation Link Error:', conversationMessageInsert.error.message);
+          return res.status(500).json({ error: 'Failed to link the message to the conversation.' });
+        }
+  
+        // Update the `updated_at` timestamp for the conversation
+        const conversationUpdate = await supabase
+          .from('conversations')
+          .update({
+            updated_at: new Date(), // Update the conversation activity timestamp
+          })
+          .eq('conversation_id', parseInt(conversation_id, 10));
+  
+        if (conversationUpdate.error) {
+          console.error('Conversation Timestamp Update Error:', conversationUpdate.error.message);
+          return res.status(500).json({ error: 'Failed to update the conversation timestamp.' });
+        }
+      }
+  
+      // Step 4: Emit the "newMessage" event using Socket.IO so that the frontend receives the update automatically.
+      // Assumes that you've attached the Socket.IO instance to your Express app as "io".
+      const io = req.app.get('io');
+      if (io) {
         if (orderId) {
-            const orderMessageInsert = await supabase
-                .from('order_messages')
-                .insert([
-                    {
-                        order_id: parseInt(orderId, 10), // Ensure `orderId` is an integer
-                        message_id: messageData.id, // Link the message ID to the order
-                        linked_at: new Date(), // Timestamp for linking
-                    },
-                ]);
-
-            if (orderMessageInsert.error) {
-                console.error('Order Link Error:', orderMessageInsert.error.message);
-                return res.status(500).json({ error: 'Failed to link the message to the order.' });
-            }
+          // Send the message to all clients subscribed to the order room
+          io.to('order_' + orderId).emit('newMessage', messageData);
         }
-
         if (conversation_id) {
-            const conversationMessageInsert = await supabase
-                .from('conversation_messages')
-                .insert([
-                    {
-                        conversation_id: parseInt(conversation_id, 10), // Ensure `conversation_id` is an integer
-                        message_id: messageData.id, // Link the message ID to the conversation
-                        added_at: new Date(), // Timestamp for linking
-                    },
-                ]);
-
-            if (conversationMessageInsert.error) {
-                console.error('Conversation Link Error:', conversationMessageInsert.error.message);
-                return res.status(500).json({ error: 'Failed to link the message to the conversation.' });
-            }
-
-            // Update the `updated_at` timestamp for the conversation
-            const conversationUpdate = await supabase
-                .from('conversations')
-                .update({
-                    updated_at: new Date(), // Update the conversation activity timestamp
-                })
-                .eq('conversation_id', parseInt(conversation_id, 10));
-
-            if (conversationUpdate.error) {
-                console.error('Conversation Timestamp Update Error:', conversationUpdate.error.message);
-                return res.status(500).json({ error: 'Failed to update the conversation timestamp.' });
-            }
+          // Alternatively, send the message to the conversation room
+          io.to('conversation_' + conversation_id).emit('newMessage', messageData);
         }
-
-        // Step 4: Return success response with the message data
-        res.status(201).json({
-            message: 'Message sent successfully!',
-            messageData,
-        });
+      }
+  
+      // Step 5: Return success response with the message data
+      res.status(201).json({
+        message: 'Message sent successfully!',
+        messageData,
+      });
     } catch (err) {
-        console.error('Unexpected Error in Message Sending:', err.message);
-        res.status(500).json({ error: 'Internal server error.' });
+      console.error('Unexpected Error in Message Sending:', err.message);
+      res.status(500).json({ error: 'Internal server error.' });
     }
-});
+  });
 
 // Send Message from Superuser
 router.post('/superuser/send', upload.single('image'), async (req, res) => {
     const { superuser_id, orderId, conversation_id, message } = req.body; // Extract fields from form-data
     const imageFile = req.file; // Handle optional image upload
-
+  
     // Validate required inputs
     if (!superuser_id || (!message && !imageFile)) {
-        return res.status(400).json({ error: 'Superuser ID and either a message or an image are required.' });
+      return res.status(400).json({ error: 'Superuser ID and either a message or an image are required.' });
     }
-
+  
     if (!orderId && !conversation_id) {
-        return res.status(400).json({ error: 'Either order ID or conversation ID is required.' });
+      return res.status(400).json({ error: 'Either order ID or conversation ID is required.' });
     }
-
+  
     try {
-        // Step 1: Check Superuser Permissions
-        const isAuthorized = await isSuperUser(superuser_id); // Verify if the user is a valid superuser
-        if (!isAuthorized) {
-            return res.status(403).json({ error: 'Unauthorized superuser.' });
+      // Step 1: Check Superuser Permissions
+      const isAuthorized = await isSuperUser(superuser_id); // Verify if the user is a valid superuser
+      if (!isAuthorized) {
+        return res.status(403).json({ error: 'Unauthorized superuser.' });
+      }
+  
+      let imageUrl = null;
+  
+      // Step 2: Upload image if provided
+      if (imageFile) {
+        try {
+          console.log('Uploading image...');
+          imageUrl = await uploadImageToSupabase(
+            imageFile.buffer,
+            `superuser_${Date.now()}_${imageFile.originalname}`
+          );
+        } catch (err) {
+          console.error('Image Upload Error:', err.message);
+          return res.status(500).json({ error: 'Failed to upload image.' });
         }
-
-        let imageUrl = null;
-
-        // Step 2: Upload image if provided
-        if (imageFile) {
-            try {
-                console.log('Uploading image...');
-                imageUrl = await uploadImageToSupabase(
-                    imageFile.buffer,
-                    `superuser_${Date.now()}_${imageFile.originalname}`
-                );
-            } catch (err) {
-                console.error('Image Upload Error:', err.message);
-                return res.status(500).json({ error: 'Failed to upload image.' });
-            }
+      }
+  
+      // Step 3: Insert the message into the `messages` table
+      const messageInsert = await supabase
+        .from('messages')
+        .insert([
+          {
+            sender: superuser_id, // Superuser ID as the sender
+            message: message?.trim() || null, // Store the message content
+            image_url: imageUrl || null, // Store the uploaded image URL if present
+            read_status: false, // Default read status
+            is_edited: false, // Message is not edited initially
+            created_at: new Date(), // Timestamp for message creation
+          },
+        ])
+        .select();
+  
+      if (messageInsert.error) {
+        console.error('Message Insert Error:', messageInsert.error.message);
+        return res.status(500).json({ error: 'Failed to save the message.' });
+      }
+  
+      const messageData = messageInsert.data[0];
+  
+      // Step 4: Link the message to either an order or a conversation
+      if (orderId) {
+        const orderMessageInsert = await supabase
+          .from('order_messages')
+          .insert([
+            {
+              order_id: parseInt(orderId, 10), // Parse orderId as an integer
+              message_id: messageData.id, // Link the message ID
+              linked_at: new Date(), // Timestamp for linking
+            },
+          ]);
+  
+        if (orderMessageInsert.error) {
+          console.error('Order Link Error:', orderMessageInsert.error.message);
+          return res.status(500).json({ error: 'Failed to link the message to the order.' });
         }
-
-        // Step 3: Insert the message into the `messages` table
-        const messageInsert = await supabase
-            .from('messages')
-            .insert([
-                {
-                    sender: superuser_id, // Superuser ID as the sender
-                    message: message?.trim() || null, // Store the message content
-                    image_url: imageUrl || null, // Store the uploaded image URL if present
-                    read_status: false, // Default read status
-                    is_edited: false, // Message is not edited initially
-                    created_at: new Date(), // Timestamp for message creation
-                },
-            ])
-            .select();
-
-        if (messageInsert.error) {
-            console.error('Message Insert Error:', messageInsert.error.message);
-            return res.status(500).json({ error: 'Failed to save the message.' });
+      }
+  
+      if (conversation_id) {
+        const conversationMessageInsert = await supabase
+          .from('conversation_messages')
+          .insert([
+            {
+              conversation_id: parseInt(conversation_id, 10), // Parse conversation_id as an integer
+              message_id: messageData.id, // Link the message ID to the conversation
+              added_at: new Date(), // Timestamp for linking
+            },
+          ]);
+  
+        if (conversationMessageInsert.error) {
+          console.error('Conversation Link Error:', conversationMessageInsert.error.message);
+          return res.status(500).json({ error: 'Failed to link the message to the conversation.' });
         }
-
-        const messageData = messageInsert.data[0];
-
-        // Step 4: Link the message to either an order or a conversation
+  
+        // Update the `updated_at` timestamp in the conversation
+        const conversationUpdate = await supabase
+          .from('conversations')
+          .update({
+            updated_at: new Date(), // Refresh the timestamp for the conversation
+          })
+          .eq('conversation_id', parseInt(conversation_id, 10));
+  
+        if (conversationUpdate.error) {
+          console.error('Conversation Timestamp Update Error:', conversationUpdate.error.message);
+          return res.status(500).json({ error: 'Failed to update the conversation timestamp.' });
+        }
+      }
+  
+      // Step 5: Emit the "newMessage" event using Socket.IO so that the frontend receives the update automatically.
+      const io = req.app.get('io'); // The Socket.IO instance attached to the app
+      if (io) {
         if (orderId) {
-            const orderMessageInsert = await supabase
-                .from('order_messages')
-                .insert([
-                    {
-                        order_id: parseInt(orderId, 10), // Parse orderId as an integer
-                        message_id: messageData.id, // Link the message ID
-                        linked_at: new Date(), // Timestamp for linking
-                    },
-                ]);
-
-            if (orderMessageInsert.error) {
-                console.error('Order Link Error:', orderMessageInsert.error.message);
-                return res.status(500).json({ error: 'Failed to link the message to the order.' });
-            }
+          // Emit event to clients in the order room (e.g., room name "order_123")
+          io.to('order_' + orderId).emit('newMessage', messageData);
         }
-
         if (conversation_id) {
-            const conversationMessageInsert = await supabase
-                .from('conversation_messages')
-                .insert([
-                    {
-                        conversation_id: parseInt(conversation_id, 10), // Parse conversation_id as an integer
-                        message_id: messageData.id, // Link the message ID to the conversation
-                        added_at: new Date(), // Timestamp for linking
-                    },
-                ]);
-
-            if (conversationMessageInsert.error) {
-                console.error('Conversation Link Error:', conversationMessageInsert.error.message);
-                return res.status(500).json({ error: 'Failed to link the message to the conversation.' });
-            }
-
-            // Update the `updated_at` timestamp in the conversation
-            const conversationUpdate = await supabase
-                .from('conversations')
-                .update({
-                    updated_at: new Date(), // Refresh the timestamp for the conversation
-                })
-                .eq('conversation_id', parseInt(conversation_id, 10));
-
-            if (conversationUpdate.error) {
-                console.error('Conversation Timestamp Update Error:', conversationUpdate.error.message);
-                return res.status(500).json({ error: 'Failed to update the conversation timestamp.' });
-            }
+          // Emit event to clients in the conversation room (e.g., room name "conversation_456")
+          io.to('conversation_' + conversation_id).emit('newMessage', messageData);
         }
-
-        // Step 5: Return a success response
-        res.status(201).json({
-            message: 'Superuser message sent successfully!',
-            messageData,
-        });
+      }
+  
+      // Step 6: Return a success response with the message data
+      res.status(201).json({
+        message: 'Superuser message sent successfully!',
+        messageData,
+      });
     } catch (err) {
-        console.error('Unexpected Error in Superuser Message Sending:', err.message);
-        res.status(500).json({ error: 'Internal server error.' });
+      console.error('Unexpected Error in Superuser Message Sending:', err.message);
+      res.status(500).json({ error: 'Internal server error.' });
     }
-});
+  });  
 
 // Get conversation id 
 router.post('/conversation/id', async (req, res) => {
@@ -678,38 +738,6 @@ router.patch('/edit', upload.single('image'), async (req, res) => {
     }
 });
 
-// Update Read Status
-router.put('/read', async (req, res) => {
-    const { messageId } = req.body;
-
-    // Validate input
-    if (!messageId) {
-        return res.status(400).json({ error: 'Message ID is required.' });
-    }
-
-    try {
-        // Update the read_status to true for the specified message
-        const { data, error } = await supabase
-            .from('messages')
-            .update({ read_status: true }) // Set read_status to true
-            .eq('id', parseInt(messageId)) // Match the message ID
-            .select(); // Return the updated message
-
-        if (error) {
-            console.error('Error updating read status:', error.message);
-            return res.status(500).json({ error: 'Failed to update read status.' });
-        }
-
-        if (data.length === 0) {
-            return res.status(404).json({ error: 'Message not found or unauthorized.' });
-        }
-
-        res.status(200).json({ message: 'Read status updated successfully!', updatedMessage: data });
-    } catch (err) {
-        console.error('Unexpected error:', err.message);
-        res.status(500).json({ error: 'Internal server error.' });
-    }
-});
 
 // Delete a Message
 router.delete('/delete', async (req, res) => {
