@@ -505,91 +505,96 @@ router.post('/cancel', async (req, res) => {
 
 // Update Order Status (and notify user)
 router.put('/status', async (req, res) => {
-    const { order_id, status, superuser_id } = req.body; // Added `superuser_id` for validation
-
-    // Validate input
+    const { order_id, status, superuser_id } = req.body;
+  
     if (!order_id) {
-        return res.status(400).json({ error: 'Order ID is required.' });
+      return res.status(400).json({ error: 'Order ID is required.' });
     }
     if (!status) {
-        return res.status(400).json({ error: 'Order status is required.' });
+      return res.status(400).json({ error: 'Order status is required.' });
     }
-
+  
     try {
-        // Validate if superuser exists
-        if (superuser_id) {
-            const { data: superuser, error: superuserError } = await supabase
-                .from('superusers')
-                .select('id')
-                .eq('id', superuser_id)
-                .single();
-
-            if (superuserError || !superuser) {
-                return res.status(403).json({ error: 'Unauthorized: Invalid superuser ID.' });
-            }
+      // Superuser validation
+      if (superuser_id) {
+        const { data: superuser, error: superuserError } = await supabase
+          .from('superusers')
+          .select('id')
+          .eq('id', superuser_id)
+          .single();
+  
+        if (superuserError || !superuser) {
+          return res.status(403).json({ error: 'Unauthorized: Invalid superuser ID.' });
         }
-
-        // Update the order status
-        const { data: updatedOrder, error } = await supabase
-            .from('orders')
-            .update({ order_status: status })
-            .eq('id', order_id)
-            .select()
-            .single(); // Retrieve the updated order
-
-        if (error) {
-            console.error('Error updating order status:', error.message);
-            return res.status(500).json({ error: 'Failed to update order status.' });
+      }
+  
+      // Update the order status
+      const { data: updatedOrder, error } = await supabase
+        .from('orders')
+        .update({ order_status: status })
+        .eq('id', order_id)
+        .select()
+        .single();
+  
+      if (error) {
+        console.error('Error updating order status:', error.message);
+        return res.status(500).json({ error: 'Failed to update order status.' });
+      }
+  
+      if (!updatedOrder) {
+        return res.status(404).json({ error: 'Order not found.' });
+      }
+  
+      // Insert the message
+      const { data: insertedMessage, error: messageError } = await supabase
+        .from('messages')
+        .insert([{
+          sender: superuser_id || 'System',
+          message: `Your order status has been updated to '${status}'.`,
+          read_status: false,
+          created_at: new Date().toISOString(),
+        }])
+        .select()
+        .single();
+  
+      if (messageError) {
+        console.error('Error inserting message:', messageError.message);
+      } else {
+        // Link the message to the order
+        const { error: linkError } = await supabase
+          .from('order_messages')
+          .insert([{
+            order_id,
+            message_id: insertedMessage.id,
+            linked_at: new Date().toISOString(),
+          }]);
+  
+        if (linkError) {
+          console.error('Error linking message to order:', linkError.message);
         }
-
-        if (!updatedOrder) {
-            return res.status(404).json({ error: 'Order not found.' });
-        }
-
-        // Insert a message into the `messages` table
-        try {
-            const { data: messageData, error: messageError } = await supabase
-                .from('messages')
-                .insert([{
-                    sender: superuser_id ? superuser_id : 'System', // Superuser ID or System
-                    message: `Your order status has been updated to '${status}'.`,
-                    read_status: false,
-                    is_edited: false,
-                    created_at: new Date().toISOString(),
-                }]);
-
-            if (messageError) {
-                console.error('Error sending update message:', messageError.message);
-            }
-
-            // Link the created message to the order using the `order_messages` table
-      const { error: linkError } = await supabase
-      .from('order_messages')
-      .insert([
-        {
-          order_id: order_id,
-          message_id: messageData.id,
-          linked_at: new Date().toISOString(),
-        },
-      ]);
-
-    if (linkError) {
-      console.error('Error linking message to order:', linkError.message);
-      return res.status(500).json({ error: 'Failed to link message to the order.' });
-    }
-        } catch (err) {
-            console.error('Unexpected error inserting message:', err.message);
-        }
-
-        res.status(200).json({
-            message: `Order status updated to '${status}' successfully, and user notified!`,
-            order: updatedOrder,
+      }
+  
+      // Emit socket event to notify frontend (assumes users are in rooms like `order_<order_id>`)
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`order_${order_id}`).emit('orderStatusUpdated', {
+          order_id,
+          status,
+          message: `Your order status has been updated to '${status}'.`
         });
+      }
+  
+      res.status(200).json({
+        message: `Order status updated to '${status}' successfully, and user notified!`,
+        order: updatedOrder,
+      });
+  
     } catch (err) {
-        console.error('Unexpected error updating order status:', err.message);
-        res.status(500).json({ error: 'Internal server error.' });
+      console.error('Unexpected error updating order status:', err.message);
+      res.status(500).json({ error: 'Internal server error.' });
     }
-});
+  });
+
 
 // Fetch Orders for a Specific User
 // Fetch Orders for a Specific User
