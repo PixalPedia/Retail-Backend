@@ -549,7 +549,7 @@ router.put('/status', async (req, res) => {
       const { data: insertedMessage, error: messageError } = await supabase
         .from('messages')
         .insert([{
-          sender: superuser_id || 'System',
+          sender: superuser_id,
           message: `Your order status has been updated to '${status}'.`,
           read_status: false,
           created_at: new Date().toISOString(),
