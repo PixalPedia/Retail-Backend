@@ -504,108 +504,100 @@ router.post('/cancel', async (req, res) => {
 });
 
 // Update Order Status
+// Update Order Status
 router.put('/status', async (req, res) => {
-    const { order_id, status, superuser_id } = req.body;
-  
-    if (!order_id) {
-      return res.status(400).json({ error: 'Order ID is required.' });
-    }
-    if (!status) {
-      return res.status(400).json({ error: 'Order status is required.' });
-    }
-  
-    try {
-      // Superuser validation
-      if (superuser_id) {
-        const { data: superuser, error: superuserError } = await supabase
-          .from('superusers')
-          .select('id')
-          .eq('id', superuser_id)
-          .single();
-  
-        if (superuserError || !superuser) {
-          return res.status(403).json({ error: 'Unauthorized: Invalid superuser ID.' });
-        }
-      }
-  
-      // Update the order status
-      const { data: updatedOrder, error } = await supabase
-        .from('orders')
-        .update({ order_status: status })
-        .eq('id', order_id)
-        .select()
-        .single();
-  
-      if (error) {
-        console.error('Error updating order status:', error.message);
-        return res.status(500).json({ error: 'Failed to update order status.' });
-      }
-  
-      if (!updatedOrder) {
-        return res.status(404).json({ error: 'Order not found.' });
-      }
-  // Fetch superuser information (ID, username, and email)
-  const { data: superuserData, error: superuserError } = await supabase
-  .from('superusers')
-  .select('id, username, email')
-  .limit(1)
-  .single();
+  const { order_id, status, superuser_id } = req.body;
 
-if (superuserError || !superuserData) {
-  console.error('Failed to fetch superuser information:', superuserError?.message);
-  return res.status(500).json({ error: 'Failed to retrieve manager information.' });
-}
-const superuser_id = superuserData.id;
+  if (!order_id) {
+    return res.status(400).json({ error: 'Order ID is required.' });
+  }
+  if (!status) {
+    return res.status(400).json({ error: 'Order status is required.' });
+  }
+  // Require a superuser_id
+  if (!superuser_id) {
+    return res.status(403).json({ error: 'Superuser ID is required.' });
+  }
 
-      // Insert the message
-      const { data: insertedMessage, error: messageError } = await supabase
-        .from('messages')
-        .insert([{
+  try {
+    // Validate the provided superuser_id against the superusers table
+    const { data: superuser, error: superuserError } = await supabase
+      .from('superusers')
+      .select('id')
+      .eq('id', superuser_id)
+      .single();
+
+    if (superuserError || !superuser) {
+      return res.status(403).json({ error: 'Unauthorized: Invalid superuser ID.' });
+    }
+
+    // Update the order status
+    const { data: updatedOrder, error } = await supabase
+      .from('orders')
+      .update({ order_status: status })
+      .eq('id', order_id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating order status:', error.message);
+      return res.status(500).json({ error: 'Failed to update order status.' });
+    }
+    if (!updatedOrder) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    // Insert the message with the validated superuser_id as sender (no fallback to 'System')
+    const { data: insertedMessage, error: messageError } = await supabase
+      .from('messages')
+      .insert([
+        {
           sender: superuser_id,
           message: `Your order status has been updated to '${status}'.`,
           read_status: false,
           created_at: new Date().toISOString(),
-        }])
-        .select()
-        .single();
-  
-      if (messageError) {
-        console.error('Error inserting message:', messageError.message);
-      } else {
-        // Link the message to the order
-        const { error: linkError } = await supabase
-          .from('order_messages')
-          .insert([{
+        },
+      ])
+      .select()
+      .single();
+
+    if (messageError) {
+      console.error('Error inserting message:', messageError.message);
+    } else {
+      // Link the inserted message to the order
+      const { error: linkError } = await supabase
+        .from('order_messages')
+        .insert([
+          {
             order_id,
             message_id: insertedMessage.id,
             linked_at: new Date().toISOString(),
-          }]);
-  
-        if (linkError) {
-          console.error('Error linking message to order:', linkError.message);
-        }
+          },
+        ]);
+      if (linkError) {
+        console.error('Error linking message to order:', linkError.message);
       }
-  
-      // Emit socket event to notify frontend (assumes users are in rooms like `order_<order_id>`)
-      const io = req.app.get('io');
-      if (io) {
-        io.to(`order_${order_id}`).emit('orderStatusUpdated', {
-          order_id,
-          status,
-          message: `Your order status has been updated to '${status}'.`
-        });
-      }
-  
-      res.status(200).json({
-        message: `Order status updated to '${status}' successfully, and user notified!`,
-        order: updatedOrder,
-      });
-  
-    } catch (err) {
-      console.error('Unexpected error updating order status:', err.message);
-      res.status(500).json({ error: 'Internal server error.' });
     }
-  });  
+
+    // Emit a socket event to notify the frontend (assumes users join rooms like `order_<order_id>`)
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`order_${order_id}`).emit('orderStatusUpdated', {
+        order_id,
+        status,
+        message: `Your order status has been updated to '${status}'.`,
+      });
+    }
+
+    res.status(200).json({
+      message: `Order status updated to '${status}' successfully, and user notified!`,
+      order: updatedOrder,
+    });
+  } catch (err) {
+    console.error('Unexpected error updating order status:', err.message);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
 
 
 // Fetch Orders for a Specific User
