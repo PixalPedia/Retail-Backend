@@ -629,9 +629,8 @@ router.patch('/edit', upload.single('image'), async (req, res) => {
       return res.status(404).json({ error: 'Message not found.' });
     }
 
-    // NEW: Verify that the sender ID in the request matches the sender of the original message.
-    // Adjust the field name as needed (here we assume the original message has a "sender" field).
-    if (Number(originalMessage.sender) !== Number(sender_id)) {
+    // NEW: Verify that the sender_id in the request matches the sender (stored as a string) in the original message.
+    if (originalMessage.sender !== sender_id) {
       return res.status(403).json({
         error: 'You are not allowed to edit this message.',
       });
@@ -675,7 +674,7 @@ router.patch('/edit', upload.single('image'), async (req, res) => {
             '/storage/v1/object/public/images/'
           )[1];
           const { error: deleteError } = await supabase.storage
-            .from('images') // Replace with your bucket name
+            .from('images')
             .remove([oldFilePath]);
 
           if (deleteError) {
@@ -700,7 +699,7 @@ router.patch('/edit', upload.single('image'), async (req, res) => {
       newImageUrl = null;
     }
 
-    // Step 4: Update the `messages` table with new content
+    // Step 4: Update the messages table with new content
     const { data: updatedMessage, error: updateError } = await supabase
       .from('messages')
       .update({
