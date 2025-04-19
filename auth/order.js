@@ -503,7 +503,7 @@ router.post('/cancel', async (req, res) => {
     }
 });
 
-// Update Order Status (and notify user)
+// Update Order Status
 router.put('/status', async (req, res) => {
     const { order_id, status, superuser_id } = req.body;
   
@@ -544,7 +544,19 @@ router.put('/status', async (req, res) => {
       if (!updatedOrder) {
         return res.status(404).json({ error: 'Order not found.' });
       }
-  
+  // Fetch superuser information (ID, username, and email)
+  const { data: superuserData, error: superuserError } = await supabase
+  .from('superusers')
+  .select('id, username, email')
+  .limit(1)
+  .single();
+
+if (superuserError || !superuserData) {
+  console.error('Failed to fetch superuser information:', superuserError?.message);
+  return res.status(500).json({ error: 'Failed to retrieve manager information.' });
+}
+const superuser_id = superuserData.id;
+
       // Insert the message
       const { data: insertedMessage, error: messageError } = await supabase
         .from('messages')
@@ -593,7 +605,7 @@ router.put('/status', async (req, res) => {
       console.error('Unexpected error updating order status:', err.message);
       res.status(500).json({ error: 'Internal server error.' });
     }
-  });
+  });  
 
 
 // Fetch Orders for a Specific User
