@@ -602,124 +602,139 @@ router.post('/fetch/order', async (req, res) => {
     }
 });
 
+// Endpoint to edit a message
 router.patch('/edit', upload.single('image'), async (req, res) => {
-    const { messageId, sender_id, newMessage } = req.body; // Extract text fields from form-data
-    const imageFile = req.file; // Handle new image upload if provided
-    const removeImage = req.body.removeImage === 'true'; // Optional flag to remove the existing image
-  
-    // Validate required inputs
-    if (!messageId || !sender_id || (!newMessage && !imageFile && !removeImage)) {
-      return res.status(400).json({
-        error: 'Message ID, sender ID, and either new content, an image, or removeImage flag are required.',
+  const { messageId, sender_id, newMessage } = req.body; // Extract text fields from form-data
+  const imageFile = req.file; // Handle new image upload if provided
+  const removeImage = req.body.removeImage === 'true'; // Optional flag to remove the existing image
+
+  // Validate required inputs
+  if (!messageId || !sender_id || (!newMessage && !imageFile && !removeImage)) {
+    return res.status(400).json({
+      error:
+        'Message ID, sender ID, and either new content, an image, or removeImage flag are required.',
+    });
+  }
+
+  try {
+    // Step 1: Fetch the original message from the database
+    const { data: originalMessage, error: fetchError } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('id', parseInt(messageId))
+      .single();
+
+    if (fetchError || !originalMessage) {
+      console.error('Message Fetch Error:', fetchError?.message || 'Message not found.');
+      return res.status(404).json({ error: 'Message not found.' });
+    }
+
+    // NEW: Verify that the sender ID in the request matches the sender of the original message.
+    // Adjust the field name as needed (here we assume the original message has a "sender" field).
+    if (Number(originalMessage.sender) !== Number(sender_id)) {
+      return res.status(403).json({
+        error: 'You are not allowed to edit this message.',
       });
     }
-  
-    try {
-      // Step 1: Fetch the original message from the database
-      const { data: originalMessage, error: fetchError } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('id', parseInt(messageId))
-        .single();
-  
-      if (fetchError || !originalMessage) {
-        console.error('Message Fetch Error:', fetchError?.message || 'Message not found.');
-        return res.status(404).json({ error: 'Message not found.' });
+
+    // Step 2: Handle edit history for message updates
+    if (
+      (newMessage && newMessage !== originalMessage.message) ||
+      (imageFile || removeImage)
+    ) {
+      const { error: editHistoryError } = await supabase.from('edited_messages').insert([
+        {
+          original_message_id: messageId,
+          old_message: originalMessage.message || null,
+          new_message: newMessage || originalMessage.message,
+          edited_by: sender_id,
+          edited_at: new Date(),
+        },
+      ]);
+
+      if (editHistoryError) {
+        console.error('Edit History Insertion Error:', editHistoryError.message);
+        return res.status(500).json({ error: 'Failed to save edit history.' });
       }
-  
-      // Step 2: Handle edit history for message updates
-      if ((newMessage && newMessage !== originalMessage.message) || (imageFile || removeImage)) {
-        const { error: editHistoryError } = await supabase
-          .from('edited_messages')
-          .insert([
-            {
-              original_message_id: messageId,
-              old_message: originalMessage.message || null,
-              new_message: newMessage || originalMessage.message,
-              edited_by: sender_id,
-              edited_at: new Date(),
-            },
-          ]);
-  
-        if (editHistoryError) {
-          console.error('Edit History Insertion Error:', editHistoryError.message);
-          return res.status(500).json({ error: 'Failed to save edit history.' });
-        }
-      }
-  
-      // Step 3: Process image upload or removal
-      let newImageUrl = originalMessage.image_url; // Default to existing image URL
-  
-      if (imageFile) {
-        try {
-          console.log('Uploading new image...');
-          newImageUrl = await uploadImageToSupabase(
-            imageFile.buffer,
-            `message_${Date.now()}_${imageFile.originalname}`
-          );
-  
-          // Remove the old image if it exists
-          if (originalMessage.image_url) {
-            const oldFilePath = originalMessage.image_url.split('/storage/v1/object/public/images/')[1];
-            const { error: deleteError } = await supabase.storage
-              .from('images') // Replace with your bucket name
-              .remove([oldFilePath]);
-  
-            if (deleteError) {
-              console.error('Old Image Deletion Error:', deleteError.message);
-              return res.status(500).json({ error: 'Failed to delete old image.' });
-            }
+    }
+
+    // Step 3: Process image upload or removal
+    let newImageUrl = originalMessage.image_url; // Default to existing image URL
+
+    if (imageFile) {
+      try {
+        console.log('Uploading new image...');
+        newImageUrl = await uploadImageToSupabase(
+          imageFile.buffer,
+          `message_${Date.now()}_${imageFile.originalname}`
+        );
+
+        // Remove the old image if it exists
+        if (originalMessage.image_url) {
+          const oldFilePath = originalMessage.image_url.split(
+            '/storage/v1/object/public/images/'
+          )[1];
+          const { error: deleteError } = await supabase.storage
+            .from('images') // Replace with your bucket name
+            .remove([oldFilePath]);
+
+          if (deleteError) {
+            console.error('Old Image Deletion Error:', deleteError.message);
+            return res.status(500).json({ error: 'Failed to delete old image.' });
           }
-        } catch (err) {
-          console.error('Image Upload Error:', err.message);
-          return res.status(500).json({ error: 'Failed to upload new image.' });
         }
-      } else if (removeImage && originalMessage.image_url) {
-        const oldFilePath = originalMessage.image_url.split('/storage/v1/object/public/images/')[1];
-        const { error: deleteError } = await supabase.storage
-          .from('images')
-          .remove([oldFilePath]);
-  
-        if (deleteError) {
-          console.error('Image Removal Error:', deleteError.message);
-          return res.status(500).json({ error: 'Failed to remove existing image.' });
-        }
-        newImageUrl = null;
+      } catch (err) {
+        console.error('Image Upload Error:', err.message);
+        return res.status(500).json({ error: 'Failed to upload new image.' });
       }
-  
-      // Step 4: Update the `messages` table with new content
-      const { data: updatedMessage, error: updateError } = await supabase
-        .from('messages')
-        .update({
-          message: newMessage || originalMessage.message,
-          image_url: newImageUrl,
-          updated_at: new Date(),
-          is_edited: true,
-        })
-        .eq('id', parseInt(messageId))
-        .select();
-  
-      if (updateError) {
-        console.error('Message Update Error:', updateError.message);
-        return res.status(500).json({ error: 'Failed to update the message.' });
+    } else if (removeImage && originalMessage.image_url) {
+      const oldFilePath = originalMessage.image_url.split('/storage/v1/object/public/images/')[1];
+      const { error: deleteError } = await supabase.storage
+        .from('images')
+        .remove([oldFilePath]);
+
+      if (deleteError) {
+        console.error('Image Removal Error:', deleteError.message);
+        return res.status(500).json({ error: 'Failed to remove existing image.' });
       }
-  
-      // Step 5: Emit a socket event to notify connected clients of the edited message
-      const io = req.app.get('io'); // Retrieve the Socket.IO instance
-      if (io) {
-        io.to(`conversation_${originalMessage.conversation_id}`).emit('messageEdited', updatedMessage[0]);
-      }
-  
-      // Step 6: Return the updated message
-      res.status(200).json({
-        message: 'Message edited successfully!',
-        updatedMessage: updatedMessage[0],
-      });
-    } catch (err) {
-      console.error('Unexpected Error in Edit Message:', err.message);
-      res.status(500).json({ error: 'Internal server error.' });
+      newImageUrl = null;
     }
-  });
+
+    // Step 4: Update the `messages` table with new content
+    const { data: updatedMessage, error: updateError } = await supabase
+      .from('messages')
+      .update({
+        message: newMessage || originalMessage.message,
+        image_url: newImageUrl,
+        updated_at: new Date(),
+        is_edited: true,
+      })
+      .eq('id', parseInt(messageId))
+      .select();
+
+    if (updateError) {
+      console.error('Message Update Error:', updateError.message);
+      return res.status(500).json({ error: 'Failed to update the message.' });
+    }
+
+    // Step 5: Emit a socket event to notify connected clients of the edited message
+    const io = req.app.get('io'); // Retrieve the Socket.IO instance
+    if (io) {
+      io.to(`conversation_${originalMessage.conversation_id}`).emit('messageEdited', updatedMessage[0]);
+    }
+
+    // Step 6: Return the updated message
+    res.status(200).json({
+      message: 'Message edited successfully!',
+      updatedMessage: updatedMessage[0],
+    });
+  } catch (err) {
+    console.error('Unexpected Error in Edit Message:', err.message);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+// Delete Message 
   router.delete('/delete', async (req, res) => {
     const { messageId } = req.body; // Extract the message ID from the request
   
