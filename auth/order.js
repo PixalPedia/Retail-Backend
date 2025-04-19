@@ -548,19 +548,35 @@ router.put('/status', async (req, res) => {
 
         // Insert a message into the `messages` table
         try {
-            const { error: messageError } = await supabase
+            const { data: messageData, error: messageError } = await supabase
                 .from('messages')
                 .insert([{
-                    order_id: order_id,
                     sender: superuser_id ? superuser_id : 'System', // Superuser ID or System
                     message: `Your order status has been updated to '${status}'.`,
                     read_status: false,
+                    is_edited: false,
                     created_at: new Date().toISOString(),
                 }]);
 
             if (messageError) {
                 console.error('Error sending update message:', messageError.message);
             }
+
+            // Link the created message to the order using the `order_messages` table
+      const { error: linkError } = await supabase
+      .from('order_messages')
+      .insert([
+        {
+          order_id: order_id,
+          message_id: messageData.id,
+          linked_at: new Date().toISOString(),
+        },
+      ]);
+
+    if (linkError) {
+      console.error('Error linking message to order:', linkError.message);
+      return res.status(500).json({ error: 'Failed to link message to the order.' });
+    }
         } catch (err) {
             console.error('Unexpected error inserting message:', err.message);
         }
