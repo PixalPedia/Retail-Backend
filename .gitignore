@@ -6,3 +6,9 @@ node_modules/
 
 # Logs
 *.log
+
+Gettoken.js
+
+hashcheck.js
+
+hashcreate.js
