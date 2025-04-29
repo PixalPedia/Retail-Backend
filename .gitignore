@@ -7,10 +7,11 @@ node_modules/
 # Logs
 *.log
 
+README
+
 Gettoken.js
 
 hashcheck.js
 
 hashcreate.js
 
-README
