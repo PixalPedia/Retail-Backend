@@ -3,6 +3,7 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const http = require('http'); // Import Node's HTTP module
 const { Server } = require('socket.io'); // Import Socket.IO server
+require('./middleware/Keep_awake');
 
 // Load environment variables
 dotenv.config();

@@ -393,6 +393,7 @@ Superuser- 76e4ad2e-346f-49b5-831e-41ea659d276f
 -- git remote add origin https://github.com/PixalPedia/Retail-bakcend.git (git repo link)
 -- git push -u origin main
 -- now you are good to go for deployment.
+-- later put you abkcedn url in keep_awake.js to keep you backend awake.
  
 (Auth.js)
 
