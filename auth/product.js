@@ -379,7 +379,7 @@ router.put('/update', upload.array('images', 5), async (req, res) => {
       product_id,
       title,
       description,
-      price,
+      initial_price, // now coming from the client
       is_discounted,
       discount_amount,
       stock_quantity,
@@ -450,13 +450,35 @@ router.put('/update', upload.array('images', 5), async (req, res) => {
       const fieldsToUpdate = {};
       if (title) fieldsToUpdate.title = title;
       if (description) fieldsToUpdate.description = description;
-      if (price !== undefined) fieldsToUpdate.price = parseFloat(price);
-      if (is_discounted !== undefined) fieldsToUpdate.is_discounted = is_discounted;
-      if (discount_amount !== undefined)
+      
+      // Instead of using client-sent "price", use "initial_price" to calculate the final price.
+      if (initial_price !== undefined) {
+        const parsedInitialPrice = parseFloat(initial_price);
+        if (is_discounted === true || is_discounted === 'true') {
+          const parsedDiscount = discount_amount ? parseFloat(discount_amount) : 0;
+          const finalPrice = parsedInitialPrice - parsedDiscount;
+          if (finalPrice < 0) {
+            return res.status(400).json({ error: 'Discount amount cannot exceed the initial price.' });
+          }
+          fieldsToUpdate.price = finalPrice;
+        } else {
+          fieldsToUpdate.price = parsedInitialPrice;
+        }
+      }
+      
+      if (is_discounted !== undefined) {
+        fieldsToUpdate.is_discounted = is_discounted;
+      }
+      if (discount_amount !== undefined) {
         fieldsToUpdate.discount_amount = discount_amount ? parseFloat(discount_amount) : null;
-      if (stock_quantity !== undefined) fieldsToUpdate.stock_quantity = parseInt(stock_quantity);
+      }
+      if (stock_quantity !== undefined) {
+        fieldsToUpdate.stock_quantity = parseInt(stock_quantity);
+      }
       // Only update images if new ones have been uploaded
-      if (newImageUrls.length > 0) fieldsToUpdate.images = newImageUrls;
+      if (newImageUrls.length > 0) {
+        fieldsToUpdate.images = newImageUrls;
+      }
   
       // Update the product details in the products table
       const { error: productUpdateError } = await supabase
